@@ -1,0 +1,25 @@
+{
+  "reactor": {
+    "L": 10,
+    "Dt":5,
+    "nt": 1,
+    "rhoc": 1870,
+    "phi": 0.39
+  },
+  "insulator": {
+    "status": "on",
+    "Din": 0.03,
+    "Do":0.07,
+    "nt": 3000,
+    "Tc": 353,
+    "io": "out"
+  },
+  "unit": {
+    "L": "m",
+    "Dt": "m",
+    "nt": "-,number of tube",
+    "rhoc": "kg/m3",
+    "phi": "-,vof",
+    "io": "in:reaction in the insides of insulator; out:inverse"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "condition": {
+    "T": 503,
+    "P": 50,
+    "recycle": "off",
+    "H2/CO2": 3,
+    "Sv": 0.65
+  },
+  "feed": "1.17E-04\t3.21E-03\t0.00E+00\t0.00E+00\t1.56E-04\t4.30E-04",
+  "unit": {
+    "T": "K",
+    "P": "bar",
+    "H2/CO2": "mole_ratio",
+    "Sv": "m3/s",
+    "feed": "mol/s"
+  }
+}
