@@ -4,14 +4,14 @@
     "P": 45,
     "recycle": "off",
     "H2/CO2": 3,
-    "Sv": 0.00349
+    "Sv": 300
   },
   "feed": "0.5041\t1.764\t0.00E+00\t0.00E+00\t0.126",
   "unit": {
     "T": "K",
     "P": "bar",
     "H2/CO2": "mole_ratio",
-    "Sv": "m3/s",
+    "Sv": "m3/(h m3)",
     "feed": "mol/s"
   }
 }

@@ -3,8 +3,8 @@
     "L": 10,
     "Dt":0.04,
     "nrt": 1,
-    "rhoc": 1775,
-    "phi": 0.5
+    "rhoc": 1950,
+    "phi": 0.67
   },
   "insulator": {
     "status": "on",

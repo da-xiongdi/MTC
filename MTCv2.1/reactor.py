@@ -49,7 +49,9 @@ class Reaction:
         self.feed_para = in_data['feed']["condition"]
         self.F0 = np.zeros(len(self.comp_list))  # component of feed gas, mol/s; ndarray
         self.P0, self.T0 = in_data['feed']["condition"]["P"], in_data['feed']["condition"]["T"]  # P0 bar, T0 K
-        self.v0 = in_data['feed']["condition"]["Sv"] / self.nrt  # volumetric flux per tube, m3/s
+        # volumetric flux per tube from space velocity
+        self.sv = in_data['feed']["condition"]["Sv"]
+        self.v0 = self.sv * self.L * np.pi * self.Dt ** 2 / 4 / 3600 / self.nrt  # volumetric flux per tube, m3/s
 
         self.Ft0 = self.P0 * 1e5 * self.v0 / R / self.T0  # total flux of feed,mol/s
         if in_data['feed']["condition"]["recycle"] == "off":  # fresh stream
@@ -209,10 +211,6 @@ class Reaction:
         dT = dH * 1e3 / heat_capacity  # K/kg_cat
 
         return dF_react[-1], dT
-
-
-
-
 
 # a = [343, 0.012360681152337636, 0.0039033729954750422, 0.03]
 # b = [524.5764062395502, 0.012489109102363472, 0.030998751112742237, 0.015]

@@ -41,7 +41,7 @@ class Simulation(Insulation):
 
         save_data = pd.DataFrame(sim_res.T, columns=self.comp_list + ['T'])
         sim_path = 'result/result_sim_%s_%s_%s_%s_%s_%s_%s.xlsx' \
-                   % (self.status, self.Dt, self.L, self.T0, self.P0, self.Tc, self.v0)
+                   % (self.status, self.Dt, self.L, self.T0, self.P0, self.Tc, self.sv)
         try:
             with pd.ExcelWriter(sim_path, engine='openpyxl', mode='a', if_sheet_exists='new') as writer:
                 save_data.to_excel(writer)
@@ -52,7 +52,7 @@ class Simulation(Insulation):
             n_col = int(len(diff_res) / 14)
             save_performance = pd.DataFrame(np.array(diff_res).reshape((n_col, 14)))
             per_path = 'result/result_diff_%s_%s_%s_%s_%s_%s_%s.xlsx' % \
-                       (self.status, self.Dt, self.L, self.T0, self.P0, self.Tc, self.v0)
+                       (self.status, self.Dt, self.L, self.T0, self.P0, self.Tc, self.sv)
             try:
                 with pd.ExcelWriter(per_path, engine='openpyxl', mode='a', if_sheet_exists='new') as writer:
                     save_performance.to_excel(writer)
@@ -90,7 +90,7 @@ class Simulation(Insulation):
                 performance.append(delta_react[1] * dl2dw)
                 performance.append(delta_diff[1] * self.nit)
             else:
-                r_v_ins_v_react, delta_react = 0, 0
+                r_v_ins_v_react, delta_diff = 0, [0,0]
 
             dF_dz = delta_react[0] * dl2dw * (1 - r_v_ins_v_react) * self.nrt + delta_diff[0] * self.nit
             dT_dz = delta_react[1] * dl2dw * (1 - r_v_ins_v_react) * self.nrt + delta_diff[1] * self.nit
