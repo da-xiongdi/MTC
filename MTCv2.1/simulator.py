@@ -6,8 +6,8 @@ import pandas as pd
 
 
 class Simulation(Insulation):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, kn_model, r_CH3OH_H2O):
+        super(Simulation, self).__init__(kn_model, r_CH3OH_H2O)
         self.status = self.insulator_para['status']
 
     def save_data(self, sim_res, diff_res):
@@ -30,6 +30,7 @@ class Simulation(Insulation):
         feed_cond = pd.Series(self.feed_para)
         res = pd.Series([r, s_react, To, sp_ch3oh, sp_h2o, r_CH3OH_H2O],
                         index=['conversion', 'select', 'To', 'sp_CH3OH', 'sp_H2O', 'N_CH3OH_H2O'])
+        print(res)
         res_save = pd.concat([feed_cond, reactor_cond, insulator_cond, res])
         res_save = pd.DataFrame(res_save.values.reshape(1, len(res_save.values)), columns=res_save.index)
         res_path = 'result/sim_log.csv'
@@ -90,7 +91,7 @@ class Simulation(Insulation):
                 performance.append(delta_react[1] * dl2dw)
                 performance.append(delta_diff[1] * self.nit)
             else:
-                r_v_ins_v_react, delta_diff = 0, [0,0]
+                r_v_ins_v_react, delta_diff = 0, [0, 0]
 
             dF_dz = delta_react[0] * dl2dw * (1 - r_v_ins_v_react) * self.nrt + delta_diff[0] * self.nit
             dT_dz = delta_react[1] * dl2dw * (1 - r_v_ins_v_react) * self.nrt + delta_diff[1] * self.nit
@@ -105,9 +106,6 @@ class Simulation(Insulation):
 
         return data, performance
 
-
-reactor = Simulation()
-reactor.simulator()
 # a = pd.Series([0, 1, 2], index=['a', 'b', 'c'])
 # # # print(a.index.tolist())
 # # a = pd.DataFrame(a.values.reshape(1,3),  columns=['a', 'b', 'c'])

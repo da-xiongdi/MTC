@@ -10,9 +10,10 @@ R = 8.314
 
 
 class Insulation(Reaction):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, kn_model, r_CH3OH_H2O):
+        super(Insulation, self).__init__(kn_model)
 
+        self.r_CH3OH_H2O = r_CH3OH_H2O # molar ratio of liquid phase
         # insulator parameters
         self.nit = self.insulator_para["nit"]  # tube number of the insulator
         self.Din, self.Do = self.insulator_para['Din'], self.insulator_para['Do']
@@ -116,15 +117,19 @@ class Insulation(Reaction):
         """
 
         P = P * 1e5
+        D_ca, D_cb = 7.1e-6, 1.1e-5
+        D_da, D_db = 1.1e-5, 1.5e-5
+        D_cm = 1 / (0.25 / D_ca + 0.75 / D_cb)
+        D_dm = 1 / (0.25 / D_da + 0.75 / D_db)
         [cp, D, k] = properties
         [T1, c1, r1] = inner_cond
         [T2, c2, r2] = outer_cond
 
         def model(z, y):
             [x, N, T, dTdz] = y
-            dx_dz = -N * (1 - x) / D / (P / R / T)
+            dx_dz = -N * (1 - x) / D_dm / (P / R / T)
             dN_dz = -N / z
-            d2T_dz2 = dTdz / z - N * cp * dTdz / k
+            d2T_dz2 = -dTdz / z + N * cp * dTdz / k
             return np.vstack((dx_dz, dN_dz, dTdz, d2T_dz2))
 
         def bound(ya, yb):
@@ -134,7 +139,7 @@ class Insulation(Reaction):
         xini = np.linspace(xa, xb, 11)
         yini = np.zeros((4, xini.size))
         yini[0] = np.linspace(c1, c2, xini.size)
-        yini[1] = (c1 - c2) / (r1 - r2)
+        yini[1] = -D_dm * (2 * P / R / (T1 + T2)) * (c1 - c2) / (r1 - r2)
         yini[2] = np.linspace(T1, T2, xini.size)
         yini[3] = (T1 - T2) / (r1 - r2)
         res = scipy.integrate.solve_bvp(model, bound, xini, yini, tol=1e-10, max_nodes=1000)
@@ -184,6 +189,7 @@ class Insulation(Reaction):
         ysol = res.sol(xsol)
         return ysol
 
+    @staticmethod
     def ode_multi3(inner_cond, outer_cond, P, properties, r):
         """
         ode for the concentration distribution along the channel, two condensates
@@ -240,8 +246,8 @@ class Insulation(Reaction):
         [cp_c, cp_d, D_c, D_d, k] = properties
         [T1, x_c1, x_d1, r1] = inner_cond
         [T2, x_c2, x_d2, r2] = outer_cond
-        D_ca, D_cb = 7.1e-6, 1.1e-5
-        D_da, D_db = 1.1e-5, 1.5e-5
+        D_ca, D_cb = 7.53e-6, 1.19e-5  # 9e-6, 1.5e-5  #
+        D_da, D_db = 1.15e-5, 1.62e-5  # 1.5e-5, 2.1e-5
         D_cm = 1 / (0.25 / D_ca + 0.75 / D_cb)
         D_dm = 1 / (0.25 / D_da + 0.75 / D_db)
         Nc_i = -(2 * P / R / (T2 + T1)) * D_cm * (x_c1 - x_c2) / (r1 - r2)
@@ -321,8 +327,7 @@ class Insulation(Reaction):
 
         # to determine the molar flux of condensate
         # for r_CH3OH_H2O in np.arange(0.1, 1, 0.1):
-        r_CH3OH_H2O = 0.35  # guess a molar ratio of liquid
-        Pi_c_cond = self.p_sat(self.Tc, [r_CH3OH_H2O / (1 + r_CH3OH_H2O), 1 / (1 + r_CH3OH_H2O)])
+        Pi_c_cond = self.p_sat(self.Tc, [self.r_CH3OH_H2O / (1 + self.r_CH3OH_H2O), 1 / (1 + self.r_CH3OH_H2O)])
         Pi_c = pd.Series(self.cold_comp(Pi_h.values, Pi_c_cond), index=self.comp_list)
         xi_c = Pi_c / P
 
@@ -351,6 +356,7 @@ class Insulation(Reaction):
             res = self.ode_single(cond_list[position], cond_list[position - 1], P, cal_property)
             na_H20, na_CH3OH = 0, res[1][-position] * radium[-position] * 2 * np.pi * vof  # mol/(s m)
             qcv = -k_e * res[3][-position] * radium[-position] * 2 * np.pi
+
             dT = qcv / Ft / property_h["cp_m"]  # k/m
         else:
             # guess a ratio between N_CH3OH and N_H2O
@@ -362,20 +368,11 @@ class Insulation(Reaction):
             cond_list = [hot_cond, cold_cond]
             cal_property = [mix_pro_ave["cp_Methanol"], mix_pro_ave["cp_H2O"], 4.5e-5, 1.4e-5, k_e]
             # print(cold_cond, hot_cond, cal_property)
-            gap_min, rmin, rmax = 1e5, 0, 5
-            # for r_n_CH3OH_H20 in np.arange(rmin, rmax, 0.01):
-            #     # diffusional governing equation
-            #     res_guess = self.ode_multi(cond_list[position], cond_list[position - 1], P, cal_property, r_n_CH3OH_H20)
-            #     gap_xd = res_guess[1][-1] - cond_list[position - 1][2]
-            #     if abs(gap_xd) < gap_min:
-            #         gap_min = abs(gap_xd)
-            #         r_sel = r_n_CH3OH_H20
-            #         if gap_min / xi_h["H2O"] < 0.05: break
-            # calculate the diffusional flux with optimized N_CH3OH/N_H2O
+
             res = self.ode_multi(cond_list[position], cond_list[position - 1], P, cal_property, 0)
             # /m * m2/s * mol/m3 = mol/s/m2
             na_H20 = res[3][-position] * radium[-position] * 2 * np.pi * vof  # mol/(s m)
-            na_CH3OH = res[2][-position] * radium[-position] * 2 * np.pi * vof #na_H20 * r_sel
+            na_CH3OH = res[2][-position] * radium[-position] * 2 * np.pi * vof
             # calculate the heat flux
             qcv = -k_e * res[5][-position] * radium[-position] * 2 * np.pi
             gap_min = res[1][-1] - cond_list[position - 1][2]
@@ -384,17 +381,23 @@ class Insulation(Reaction):
             dev = gap_min / xi_h["H2O"]
             if dev > 0.1: print([na_CH3OH, na_H20], dev, 'dev too big')
         # print(k_e / 0.01)
-        if na_H20 < 0 or na_CH3OH < 0:
-            print('err')
-            print(cond_list, cal_property)
-            print("*" * 10)
+        # print(qcv)
+
         dF = np.zeros_like(F_dict)
         dF[2:4] = [na_CH3OH, na_H20]
         if self.location == 'in':
             dF = -1 * dF
             dT = -1 * dT
+            if na_H20 < 0 or na_CH3OH < 0:
+                print('err')
+                print(cond_list, cal_property)
+                print("*" * 10)
+        else:
+            if na_H20 > 0 or na_CH3OH > 0:
+                print('err')
+                print(cond_list, cal_property)
+                print("*" * 10)
         return dF, dT * h_phi, dev
-
 
 # # pi, pj = 0.04181582, 0.332947903
 # # xi, xj = pi / (pi + pj), pj / (pi + pj)
@@ -432,20 +435,34 @@ class Insulation(Reaction):
 
 # [[529.8331065684047, 0.0172516965849795, 0.028182381875855166, 0.02], [333, 0.008126980082540864, 0.002566414762907641, 0.04]]
 # [62.0569658571729, 35.371468278312946, 4.5e-05, 1.4e-05, 0.2948365879111804]
+# [T1, c1, r1] = inner_cond
+# [cp, D, k] = properties
 # in_cond = [529.8331065684047, 0.0172516965849795, 0.028182381875855166, 0.02]
 # out_cond = [333, 0.008126980082540864, 0.002566414762907641, 0.04]
 # cal = [62.0569658571729, 35.371468278312946, 0.9e-05, 1.4e-05, 0.2948365879111804]
 # res = Insulation.ode_multi(in_cond, out_cond, 50, cal, 1)
+# res2 = Insulation.ode_single([529.8331065684047, 0.028182381875855166, 0.02], [333, 0.002566414762907641, 0.04], 50,
+#                              [35.37, 1, 0.3])
+# # [x, N, T, dTdz] = y
 # # # print(res[0])
 # xsol = np.linspace(0.02, 0.04, 200)
-# fig, axe = plt.subplots(2, 2)
+#
 # # # [xc, xd, Nc, Nd, T, dTdz] = y [xc, xd, Nd, T, dTdz] = y
 # print(res[0][0], res[0][-1])
 # print(res[1][0], res[1][-1])
-# axe[0][0].plot(xsol, res[0])
-# axe[0][0].plot(xsol, res[1])
-# axe[0][1].plot(xsol, res[2]*xsol)
-# axe[0][1].plot(xsol, res[3]*xsol)
-# axe[1][0].plot(xsol, res[4])
-# axe[1][1].plot(xsol, res[5])
+# # fig, axe = plt.subplots(2, 2)
+# # axe[0][0].plot(xsol, res[0])
+# # axe[0][0].plot(xsol, res[1])
+# # axe[0][1].plot(xsol, res[2]*xsol)
+# # axe[0][1].plot(xsol, res[3]*xsol)
+# # axe[1][0].plot(xsol, res[4])
+# # axe[1][1].plot(xsol, res[5])
+# # plt.show()
+#
+# plt.plot(xsol, res[1])
+# plt.plot(xsol, res2[0])
+# plt.show()
+#
+# plt.plot(xsol, res[5])
+# plt.plot(xsol, res2[3])
 # plt.show()

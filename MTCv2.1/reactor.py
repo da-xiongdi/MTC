@@ -14,12 +14,15 @@ class Reaction:
     simulation of adiabatic reactor for conversion of CO2 to CH3OH
     """
 
-    def __init__(self, kn_model='BU'):
+    def __init__(self, kn_model):
         self.kn_model = kn_model
         if kn_model == 'GR':
             chem_path = 'in_chem_GR.json'
         elif kn_model == 'BU':
             chem_path = 'in_chem_BU_revised.json'
+        elif kn_model == 'SL':
+            chem_path = 'in_chem_SL.json'
+
         in_path = {'chem': chem_path, 'reactor': 'in_reactor.json', 'feed': 'in_feed.json'}
         in_data = dict()
         for key, values in in_path.items():
@@ -62,7 +65,7 @@ class Reaction:
 
     @staticmethod
     def react_H(T, in_dict):
-        dH = np.zeros(2)
+        dH = np.zeros(len(in_dict["heat_reaction"].keys()))
         i = 0
         for key, value in in_dict["heat_reaction"].items():
             dH[i] = -(value[0] * T + value[1]) * 1e-6
@@ -142,6 +145,40 @@ class Reaction:
 
         return react_comp_rate
 
+    def rate_sl(self, T, Pi):
+        """
+        calculate the reaction rate
+        :param T: operating temperature, K
+        :param Pi: partial pressure of each component, bar
+        :return: reaction rate of each component for each and all reaction; mol/s/kg_cat
+        """
+        # convert the partial pressure from ndarray to pd.Series
+        Pi = pd.Series(Pi, index=self.comp_list)
+
+        # calculate the reaction constant
+        rate_const = self.kr(T, self.chem_data)
+        # print(rate_const)
+        ad_const = self.kad(T, self.chem_data)
+        eq_const = self.keq(T, self.chem_data)
+
+        # calculate the rate of each reaction
+        react_rate = np.zeros(self.react_num)
+        driving = rate_const['1'] * Pi['CO2'] * Pi['H2']**2 * (
+                1 - Pi['H2O'] * Pi["Methanol"] / Pi["H2"] ** 3 / Pi['CO2'] / eq_const['1'])
+        inhibiting = (ad_const["H2"] * Pi['H2']**0.5 +
+                      ad_const["H2O"] * Pi["H2O"] + Pi["Methanol"])
+        react_rate[0] = driving / inhibiting ** 2
+
+        driving = rate_const['2'] * Pi['CO2'] * (1 - Pi['H2O'] * Pi["CO"] / Pi["H2"] / Pi['CO2'] / eq_const['2'])
+        react_rate[1] = driving / inhibiting
+
+        # compute the reaction rate for each component in every reaction
+        react_comp_rate = self.react_sto * np.repeat(react_rate, 5).reshape(self.react_num, 5)
+        react_comp_rate = np.vstack((react_comp_rate, np.sum(react_comp_rate, axis=0).T))
+        # react_comp_rate = np.hstack((react_comp_rate, np.array([0, 0, 0]).reshape(3, 1)))
+
+        return react_comp_rate
+
     def rate_gr(self, T, Pi):
         """
         calculate the reaction rate
@@ -196,10 +233,16 @@ class Reaction:
         Pi = F_dict * R * T / v * 1e-5  # bar
 
         # calculate the change of the molar flow rate due to reactions, mol/s/kg_cat
-        dF_react = self.rate_gr(T, Pi) if self.kn_model == 'GR' else self.rate_bu(T, Pi)
+        if self.kn_model == 'GR':
+            dF_react = self.rate_gr(T, Pi)
+        elif self.kn_model == 'BU':
+            dF_react = self.rate_bu(T, Pi)
+        elif self.kn_model == 'SL':
+            dF_react = self.rate_sl(T, Pi)
 
         # calculate the change of enthalpy due to reaction, kJ/(kg_cat s)
         dH_react = self.react_H(T, self.chem_data)
+        if self.react_num == 3: dH_react[2] = dH_react[0] - dH_react[1]
         dH = np.matmul(dF_react[:-1, 0], dH_react.T)
 
         # calculate the heat capacity of each component, cp*n, J/(s K)
