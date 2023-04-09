@@ -33,16 +33,16 @@ class Simulation(Insulation):
         print(res)
         res_save = pd.concat([feed_cond, reactor_cond, insulator_cond, res])
         res_save = pd.DataFrame(res_save.values.reshape(1, len(res_save.values)), columns=res_save.index)
-        res_path = 'result/sim_log.csv'
+        res_path = 'result/sim_log_CO.csv'
         try:
             with open(res_path) as f:
-                res_save.to_csv('result/sim_log.csv', mode='a', index=False, header=False)
+                res_save.to_csv('result/sim_log_CO.csv', mode='a', index=False, header=False)
         except FileNotFoundError:
-            res_save.to_csv('result/sim_log.csv', mode='a', index=False, header=True)
+            res_save.to_csv('result/sim_log_CO.csv', mode='a', index=False, header=True)
 
         save_data = pd.DataFrame(sim_res.T, columns=self.comp_list + ['T'])
-        sim_path = 'result/result_sim_%s_%s_%s_%s_%s_%s_%s.xlsx' \
-                   % (self.status, self.Dt, self.L, self.T0, self.P0, self.Tc, self.sv)
+        sim_path = 'result/result_sim_%s_%s_%s_%s_%s_%s_%s_%s.xlsx' \
+                   % (self.status, self.feed_para['CO/CO2'], self.Dt, self.L, self.T0, self.P0, self.Tc, self.sv)
         try:
             with pd.ExcelWriter(sim_path, engine='openpyxl', mode='a', if_sheet_exists='new') as writer:
                 save_data.to_excel(writer)

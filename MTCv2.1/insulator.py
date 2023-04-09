@@ -13,7 +13,7 @@ class Insulation(Reaction):
     def __init__(self, kn_model, r_CH3OH_H2O):
         super(Insulation, self).__init__(kn_model)
 
-        self.r_CH3OH_H2O = r_CH3OH_H2O # molar ratio of liquid phase
+        self.r_CH3OH_H2O = r_CH3OH_H2O  # molar ratio of liquid phase
         # insulator parameters
         self.nit = self.insulator_para["nit"]  # tube number of the insulator
         self.Din, self.Do = self.insulator_para['Din'], self.insulator_para['Do']
@@ -246,7 +246,7 @@ class Insulation(Reaction):
         [cp_c, cp_d, D_c, D_d, k] = properties
         [T1, x_c1, x_d1, r1] = inner_cond
         [T2, x_c2, x_d2, r2] = outer_cond
-        D_ca, D_cb = 7.53e-6, 1.19e-5  # 9e-6, 1.5e-5  #
+        D_ca, D_cb = 7.53e-6, 1.19e-5  # 9e-6, 1.5e-5  # 2.5e-5, 3e-5
         D_da, D_db = 1.15e-5, 1.62e-5  # 1.5e-5, 2.1e-5
         D_cm = 1 / (0.25 / D_ca + 0.75 / D_cb)
         D_dm = 1 / (0.25 / D_da + 0.75 / D_db)
@@ -346,6 +346,8 @@ class Insulation(Reaction):
             res = self.ode_single(cond_list[position], cond_list[position - 1], P, cal_property)
             na_H20, na_CH3OH = res[1][-position] * radium[-position] * 2 * np.pi * vof, 0  # mol/(s m)
             qcv = -k_e * res[3][-position] * radium[-position] * 2 * np.pi
+            # print(Th)
+            # print(qcv, k_e, Ft, property_h['cp_m'])
             dT = qcv / Ft / property_h["cp_m"]  # k/m
         elif xi_c["H2O"] > xi_h["H2O"] * 0.99:
             # only CH3OH diffuse
@@ -368,7 +370,6 @@ class Insulation(Reaction):
             cond_list = [hot_cond, cold_cond]
             cal_property = [mix_pro_ave["cp_Methanol"], mix_pro_ave["cp_H2O"], 4.5e-5, 1.4e-5, k_e]
             # print(cold_cond, hot_cond, cal_property)
-
             res = self.ode_multi(cond_list[position], cond_list[position - 1], P, cal_property, 0)
             # /m * m2/s * mol/m3 = mol/s/m2
             na_H20 = res[3][-position] * radium[-position] * 2 * np.pi * vof  # mol/(s m)

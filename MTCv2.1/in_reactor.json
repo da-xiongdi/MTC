@@ -1,17 +1,17 @@
 {
   "reactor": {
     "L": 10,
-    "Dt":0.05,
+    "Dt":0.03,
     "nrt": 1,
     "rhoc": 1950,
     "phi": 0.67
   },
   "insulator": {
     "status": "on",
-    "Din": 0.06,
-    "Do":0.09,
+    "Din": 0.03,
+    "Do":0.06,
     "nit": 1,
-    "Tc": 338,
+    "Tc": 333,
     "io": "in"
   },
   "unit": {

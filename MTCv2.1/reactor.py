@@ -46,7 +46,6 @@ class Reaction:
         for i in range(self.react_num):
             key = str(i + 1)
             self.react_sto[i] = in_data['chem']["stoichiometry"][key]
-            # self.react_dH[i] = in_data['chem']["heat_reaction"][key]
 
         # feed gas parameter
         self.feed_para = in_data['feed']["condition"]
@@ -57,11 +56,18 @@ class Reaction:
         self.v0 = self.sv * self.L * np.pi * self.Dt ** 2 / 4 / 3600 / self.nrt  # volumetric flux per tube, m3/s
 
         self.Ft0 = self.P0 * 1e5 * self.v0 / R / self.T0  # total flux of feed,mol/s
-        if in_data['feed']["condition"]["recycle"] == "off":  # fresh stream
-            self.F0[0] = self.Ft0 / (in_data['feed']["condition"]["H2/CO2"] + 1)
-            self.F0[1] = self.Ft0 - self.F0[0]
+        if self.feed_para["recycle"] == "off":  # fresh stream
+            # self.F0[0] = 1 / (1 + 3 + self.feed_para['CO/CO2'] + self.feed_para['CO/CO2'] * 2) * self.Ft0
+            # self.F0[4] = self.F0[0] * self.feed_para['CO/CO2']
+            # self.F0[1] = self.Ft0 - self.F0[0] - self.F0[4]
+            self.F0[0] = 1 / (1 + 1*self.feed_para["H2/CO2"] + self.feed_para['CO/CO2'] + self.feed_para['CO/CO2'] * 0) * self.Ft0
+            self.F0[4] = self.F0[0] * self.feed_para['CO/CO2']
+            self.F0[1] = self.Ft0 - self.F0[0] - self.F0[4]
+            # self.F0[0] = self.Ft0 / (in_data['feed']["condition"]["H2/CO2"] + 1)
+            # self.F0[1] = self.Ft0 - self.F0[0]
         elif in_data['feed']["condition"]["recycle"] == "on":  # recycled stream
             self.F0 = np.array([float(i) for i in in_data['feed']["feed"].split('\t')])
+        print(self.F0)
 
     @staticmethod
     def react_H(T, in_dict):
@@ -70,7 +76,6 @@ class Reaction:
         for key, value in in_dict["heat_reaction"].items():
             dH[i] = -(value[0] * T + value[1]) * 1e-6
             i += 1
-        # print(dH)
         return dH
 
     @staticmethod
@@ -163,9 +168,9 @@ class Reaction:
 
         # calculate the rate of each reaction
         react_rate = np.zeros(self.react_num)
-        driving = rate_const['1'] * Pi['CO2'] * Pi['H2']**2 * (
+        driving = rate_const['1'] * Pi['CO2'] * Pi['H2'] ** 2 * (
                 1 - Pi['H2O'] * Pi["Methanol"] / Pi["H2"] ** 3 / Pi['CO2'] / eq_const['1'])
-        inhibiting = (ad_const["H2"] * Pi['H2']**0.5 +
+        inhibiting = (ad_const["H2"] * Pi['H2'] ** 0.5 +
                       ad_const["H2O"] * Pi["H2O"] + Pi["Methanol"])
         react_rate[0] = driving / inhibiting ** 2
 
