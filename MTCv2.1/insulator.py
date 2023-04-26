@@ -10,13 +10,15 @@ R = 8.314
 
 
 class Insulation(Reaction):
-    def __init__(self, kn_model, r_CH3OH_H2O):
-        super(Insulation, self).__init__(kn_model)
+    def __init__(self, reactor_para, chem_para, feed_para, insulator_para, r_CH3OH_H2O):
+        super(Insulation, self).__init__(reactor_para, chem_para, feed_para)
 
         self.r_CH3OH_H2O = r_CH3OH_H2O  # molar ratio of liquid phase
         # insulator parameters
+        self.insulator_para = insulator_para
         self.nit = self.insulator_para["nit"]  # tube number of the insulator
-        self.Din, self.Do = self.insulator_para['Din'], self.insulator_para['Do']
+        self.Din = self.insulator_para['Din']
+        self.Do = self.Din + self.insulator_para['Thick'] * 2
         self.Tc = self.insulator_para['Tc']
         self.location = self.insulator_para["io"]
 
@@ -301,7 +303,6 @@ class Insulation(Reaction):
 
         # insulator parameter
         radium = [self.Din / 2, self.Do / 2]
-        position = 0 if self.location == "in" else 1  # 1 means the reactor in the shell side
 
         # calculate the partial pressure
         Pi_h = pd.Series(Pi, index=self.comp_list, dtype="float")  # pressure of gases in the reactor, bar
@@ -320,9 +321,9 @@ class Insulation(Reaction):
             mix_pro_ave = self.mixture_property((self.Tc + Th) / 2, Pi_h, self.comp_list)
             property_h = self.mixture_property(Th, Pi_h, self.comp_list)
             k_e = mix_pro_ave["k"] * vof + ks * (1 - vof)  # effective heat conductivity of the insulator
-            qcv = -2 * np.pi * k_e * (self.Tc - Th) / np.log(radium[1 - position] / radium[position])
+            qcv = -2 * np.pi * k_e * (self.Tc - Th) / np.log(radium[1 - self.location] / radium[self.location])
             dT = qcv / Ft / property_h["cp_m"]
-            dT = -dT if self.location == 'in' else dT
+            dT = -dT if self.location == 0 else dT
             return np.zeros(len(self.comp_list)), dT * h_phi, 0
 
         # to determine the molar flux of condensate
@@ -339,25 +340,25 @@ class Insulation(Reaction):
         dev = 0
         if xi_c["Methanol"] > xi_h["Methanol"] * 0.99:
             # only H2O diffused
-            cold_cond = [self.Tc, xi_c["H2O"], radium[1 - position]]
-            hot_cond = [Th, xi_h["H2O"], radium[position]]
+            cold_cond = [self.Tc, xi_c["H2O"], radium[1 - self.location]]
+            hot_cond = [Th, xi_h["H2O"], radium[self.location]]
             cond_list = [hot_cond, cold_cond]
             cal_property = [mix_pro_ave["cp_H2O"], 1.4e-5, k_e]
-            res = self.ode_single(cond_list[position], cond_list[position - 1], P, cal_property)
-            na_H20, na_CH3OH = res[1][-position] * radium[-position] * 2 * np.pi * vof, 0  # mol/(s m)
-            qcv = -k_e * res[3][-position] * radium[-position] * 2 * np.pi
+            res = self.ode_single(cond_list[self.location], cond_list[self.location - 1], P, cal_property)
+            na_H20, na_CH3OH = res[1][-self.location] * radium[-self.location] * 2 * np.pi * vof, 0  # mol/(s m)
+            qcv = -k_e * res[3][-self.location] * radium[-self.location] * 2 * np.pi
             # print(Th)
             # print(qcv, k_e, Ft, property_h['cp_m'])
             dT = qcv / Ft / property_h["cp_m"]  # k/m
         elif xi_c["H2O"] > xi_h["H2O"] * 0.99:
             # only CH3OH diffuse
-            cold_cond = [self.Tc, xi_c["Methanol"], radium[1 - position]]
-            hot_cond = [Th, xi_h["Methanol"], radium[position]]
+            cold_cond = [self.Tc, xi_c["Methanol"], radium[1 - self.location]]
+            hot_cond = [Th, xi_h["Methanol"], radium[self.location]]
             cond_list = [hot_cond, cold_cond]
             cal_property = [mix_pro_ave["cp_Methanol"], 4.5e-5, k_e]
-            res = self.ode_single(cond_list[position], cond_list[position - 1], P, cal_property)
-            na_H20, na_CH3OH = 0, res[1][-position] * radium[-position] * 2 * np.pi * vof  # mol/(s m)
-            qcv = -k_e * res[3][-position] * radium[-position] * 2 * np.pi
+            res = self.ode_single(cond_list[self.location], cond_list[self.location - 1], P, cal_property)
+            na_H20, na_CH3OH = 0, res[1][-self.location] * radium[-self.location] * 2 * np.pi * vof  # mol/(s m)
+            qcv = -k_e * res[3][-self.location] * radium[-self.location] * 2 * np.pi
 
             dT = qcv / Ft / property_h["cp_m"]  # k/m
         else:
@@ -365,18 +366,18 @@ class Insulation(Reaction):
             # determine the saturated pressure in cold side
             # perform the calculation of diffusional flux
             # the best ratio is selected by comparing the xi_h["H2O"]
-            cold_cond = [self.Tc, xi_c["Methanol"], xi_c["H2O"], radium[1 - position]]
-            hot_cond = [Th, xi_h["Methanol"], xi_h["H2O"], radium[position]]
+            cold_cond = [self.Tc, xi_c["Methanol"], xi_c["H2O"], radium[1 - self.location]]
+            hot_cond = [Th, xi_h["Methanol"], xi_h["H2O"], radium[self.location]]
             cond_list = [hot_cond, cold_cond]
             cal_property = [mix_pro_ave["cp_Methanol"], mix_pro_ave["cp_H2O"], 4.5e-5, 1.4e-5, k_e]
             # print(cold_cond, hot_cond, cal_property)
-            res = self.ode_multi(cond_list[position], cond_list[position - 1], P, cal_property, 0)
+            res = self.ode_multi(cond_list[self.location], cond_list[self.location - 1], P, cal_property, 0)
             # /m * m2/s * mol/m3 = mol/s/m2
-            na_H20 = res[3][-position] * radium[-position] * 2 * np.pi * vof  # mol/(s m)
-            na_CH3OH = res[2][-position] * radium[-position] * 2 * np.pi * vof
+            na_H20 = res[3][-self.location] * radium[-self.location] * 2 * np.pi * vof  # mol/(s m)
+            na_CH3OH = res[2][-self.location] * radium[-self.location] * 2 * np.pi * vof
             # calculate the heat flux
-            qcv = -k_e * res[5][-position] * radium[-position] * 2 * np.pi
-            gap_min = res[1][-1] - cond_list[position - 1][2]
+            qcv = -k_e * res[5][-self.location] * radium[-self.location] * 2 * np.pi
+            gap_min = res[1][-1] - cond_list[self.location - 1][2]
 
             dT = qcv / Ft / property_h["cp_m"]  # k/m
             dev = gap_min / xi_h["H2O"]
@@ -386,7 +387,7 @@ class Insulation(Reaction):
 
         dF = np.zeros_like(F_dict)
         dF[2:4] = [na_CH3OH, na_H20]
-        if self.location == 'in':
+        if self.location == 0:
             dF = -1 * dF
             dT = -1 * dT
             if na_H20 < 0 or na_CH3OH < 0:

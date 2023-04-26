@@ -3,6 +3,7 @@ import os.path
 import sys
 
 import numpy as np
+import pandas as pd
 
 R = 8.314
 
@@ -24,12 +25,7 @@ class ReadData:
         else:
             print('kn_model should be one of BU, GR, and SL')
             sys.exit(1)
-        self.comp_list = ["CO2", "H2", "Methanol", "H2O", "CO"]
-        self.react_num = len(self.chem["kr"])
-        self.react_sto = np.empty((self.react_num, 5))
-        for i in range(self.react_num):
-            key = str(i + 1)
-            self.react_sto[i] = self.chem["stoichiometry"][key]
+        self.chem['kn_model'] = kn_model
 
         # data path for reactor and feed gas
         self.root_path = sys.path[0]
@@ -47,17 +43,90 @@ class ReadData:
 
         # reactor parameters
         self.react_para = in_data['reactor']["reactor"]
-        self.L, self.Dt = self.react_para['L'], self.react_para['Dt']  # length, m
-        self.nrt = self.react_para['nrt']  # number of the reaction tube
-        self.phi = self.react_para["phi"]  # void of fraction
-        self.rhoc = self.react_para["rhoc"]  # density of catalyst, kg/m3
+
+        # insulator parameters
         self.insulator_para = in_data['reactor']["insulator"]
 
         # feed gas parameter
         self.feed_para = in_data['feed']["condition"]
-        self.F0 = np.zeros(len(self.comp_list))  # component of feed gas, mol/s
-        self.P0, self.T0 = self.feed_para["P"], self.feed_para["T"]  # P0 bar, T0 K
-        self.sv = self.feed_para["Sv"]  # volumetric flux per tube from space velocity
+
+    @property
+    def feed_data(self):
+
+        # data from json
+        H2_CO2 = self.feed_para["H2/CO2"]
+        recycle = 0 if self.feed_para["recycle"] == 'on' else 1
+
+        # feed para frame
+        T0_array = self.data_array(self.feed_para["T"])
+        P0_array = self.data_array(self.feed_para["P"])
+        sv_array = self.data_array(self.feed_para["Sv"])
+        CO_CO2_array = self.data_array(self.feed_para['CO/CO2'])
+        feed_num = len(T0_array) * len(P0_array) * len(sv_array) * len(CO_CO2_array)
+        feed_para = pd.DataFrame(index=np.arange(feed_num), columns=list(self.feed_para.keys()))
+        i = 0
+        for T in T0_array:
+            for P in P0_array:
+                for sv in sv_array:
+                    for CO_CO2 in CO_CO2_array:
+                        feed_para.iloc[i] = np.array([T, P, recycle, H2_CO2, CO_CO2, sv])
+                        i += 1
+        return feed_para
+
+    @property
+    def insulator_data(self):
+        # insulator parameters
+
+        status = 0 if self.insulator_para['status'] == 'on' else 1
+        location = 0 if self.insulator_para["io"] == 'in' else 1
+        nit = self.insulator_para["nit"]  # tube number of the insulator
+        Thick = self.insulator_para['Thick']
+
+        # insulator para frame
+        Din_array = self.data_array(self.insulator_para['Din'])
+        Tc_array = self.data_array(self.insulator_para['Tc'])
+        if status == 'off':
+            insulator_para = self.insulator_para
+        else:
+            insulator_num = len(Tc_array)
+            insulator_para = pd.DataFrame(index=np.arange(insulator_num), columns=list(self.insulator_para.keys()))
+            i = 0
+            # for Din in Din_array:
+            for Tc in Tc_array:
+                insulator_para.iloc[i] = [status, 0, Thick, nit, Tc, location]
+                i += 1
+
+        return insulator_para
+
+    @property
+    def reactor_data(self):
+        L = self.react_para['L']  # length, m
+        nrt = self.react_para['nrt']  # number of the reaction tube
+        phi = self.react_para["phi"]  # void of fraction
+        rhoc = self.react_para["rhoc"]  # density of catalyst, kg/m3
+
+        # reactor para frame
+        Dt_array = self.data_array(self.react_para['Dt'])
+        reactor_num = len(Dt_array)
+        react_para = pd.DataFrame(index=np.arange(reactor_num), columns=list(self.react_para.keys()))
+        i = 0
+        for Dt in Dt_array:
+            react_para.iloc[i] = [L, Dt, nrt, rhoc, phi]
+            i += 1
+        return react_para
+
+    @staticmethod
+    def data_array(in_data):
+        try:
+            data_lenth = len(in_data)
+        except TypeError:
+            print("Value in json should be list!")
+            sys.exit(1)
+        if data_lenth != 3:
+            out_data = np.array(in_data)
+        elif data_lenth == 3:
+            out_data = np.linspace(in_data[0], in_data[1], in_data[2])
+        return out_data
 
     @property
     def hr(self):
@@ -156,9 +225,13 @@ class ReadData:
         return chem_data
 
 
-data = ReadData(kn_model='BU')
-print(data.chem)
-
+# data = ReadData(kn_model='BU')
+# # print(data.feed_para.keys())
+# # print(pd.DataFrame(columns=data.feed_para.keys()))
+# print(data.feed_data)
+# print(data.insulator_data)
+# print(data.reactor_data)
+# print()
 # print(data.kn_bu["kr"])
 # react_rate_constant = {}
 #

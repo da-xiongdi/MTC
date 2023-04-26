@@ -14,60 +14,40 @@ class Reaction:
     simulation of adiabatic reactor for conversion of CO2 to CH3OH
     """
 
-    def __init__(self, kn_model):
-        self.kn_model = kn_model
-        if kn_model == 'GR':
-            chem_path = 'in_chem_GR.json'
-        elif kn_model == 'BU':
-            chem_path = 'in_chem_BU_revised.json'
-        elif kn_model == 'SL':
-            chem_path = 'in_chem_SL.json'
-
-        in_path = {'chem': chem_path, 'reactor': 'in_reactor.json', 'feed': 'in_feed.json'}
-        in_data = dict()
-        for key, values in in_path.items():
-            with open(values) as f:
-                in_data[key] = json.load(f)
+    def __init__(self, reactor_para, chem_para, feed_para):
 
         # reactor parameters
-        self.react_para = in_data['reactor']["reactor"]
-        self.L, self.Dt = in_data['reactor']["reactor"]['L'], in_data['reactor']["reactor"]['Dt']  # length, m
-        self.nrt = in_data['reactor']["reactor"]['nrt']  # number of the reaction tube
-        self.phi = in_data['reactor']["reactor"]["phi"]  # void of fraction
-        self.rhoc = in_data['reactor']["reactor"]["rhoc"]  # density of catalyst, kg/m3
-        self.insulator_para = in_data['reactor']["insulator"]
+        self.react_para = reactor_para
+        self.L, self.Dt = self.react_para['L'], self.react_para['Dt']  # length, m
+        self.nrt = self.react_para['nrt']  # number of the reaction tube
+        self.phi = self.react_para["phi"]  # void of fraction
+        self.rhoc = self.react_para["rhoc"]  # density of catalyst, kg/m3
 
         # prescribed chem data of reaction
-        self.chem_data = in_data['chem']
-        self.comp_list = in_data['chem']["comp_list"]
-        self.react_num = len(in_data['chem']["kr"])
+        self.comp_list = ["CO2", "H2", "Methanol", "H2O", "CO"]
+        self.chem_data = chem_para
+        self.react_num = len(self.chem_data["kr"])
         self.react_sto = np.empty((self.react_num, 5))
-        # self.react_dH = np.empty(self.react_num)
+        self.kn_model = self.chem_data['kn_model']
         for i in range(self.react_num):
             key = str(i + 1)
-            self.react_sto[i] = in_data['chem']["stoichiometry"][key]
+            self.react_sto[i] = self.chem_data["stoichiometry"][key]
 
         # feed gas parameter
-        self.feed_para = in_data['feed']["condition"]
+        self.feed_para = feed_para
         self.F0 = np.zeros(len(self.comp_list))  # component of feed gas, mol/s; ndarray
-        self.P0, self.T0 = in_data['feed']["condition"]["P"], in_data['feed']["condition"]["T"]  # P0 bar, T0 K
+        self.P0, self.T0 = self.feed_para["P"], self.feed_para["T"]  # P0 bar, T0 K
         # volumetric flux per tube from space velocity
-        self.sv = in_data['feed']["condition"]["Sv"]
+        self.sv = self.feed_para["Sv"]
         self.v0 = self.sv * self.L * np.pi * self.Dt ** 2 / 4 / 3600 / self.nrt  # volumetric flux per tube, m3/s
 
         self.Ft0 = self.P0 * 1e5 * self.v0 / R / self.T0  # total flux of feed,mol/s
-        if self.feed_para["recycle"] == "off":  # fresh stream
-            # self.F0[0] = 1 / (1 + 3 + self.feed_para['CO/CO2'] + self.feed_para['CO/CO2'] * 2) * self.Ft0
-            # self.F0[4] = self.F0[0] * self.feed_para['CO/CO2']
-            # self.F0[1] = self.Ft0 - self.F0[0] - self.F0[4]
+        if self.feed_para["recycle"] == 1:  # fresh stream
             self.F0[0] = 1 / (1 + 1*self.feed_para["H2/CO2"] + self.feed_para['CO/CO2'] + self.feed_para['CO/CO2'] * 0) * self.Ft0
             self.F0[4] = self.F0[0] * self.feed_para['CO/CO2']
             self.F0[1] = self.Ft0 - self.F0[0] - self.F0[4]
-            # self.F0[0] = self.Ft0 / (in_data['feed']["condition"]["H2/CO2"] + 1)
-            # self.F0[1] = self.Ft0 - self.F0[0]
-        elif in_data['feed']["condition"]["recycle"] == "on":  # recycled stream
-            self.F0 = np.array([float(i) for i in in_data['feed']["feed"].split('\t')])
-        print(self.F0)
+        elif self.feed_para["recycle"] == 0:  # recycled stream
+            self.F0 = np.array([float(i) for i in self.feed_para["feed"].split('\t')])
 
     @staticmethod
     def react_H(T, in_dict):
