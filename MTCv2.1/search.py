@@ -6,7 +6,7 @@ from sklearn.preprocessing import StandardScaler
 import numpy as np
 import pandas as pd
 # 'BU',
-for model in ['SL']:
+for model in ['BU']:
     # prepare data for the simulation
 
     in_data = ReadData(kn_model=model)

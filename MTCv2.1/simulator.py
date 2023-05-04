@@ -5,6 +5,7 @@ import scipy
 from insulator import Insulation
 import numpy as np
 import pandas as pd
+from vle import VLE
 
 
 class Simulation(Insulation):
@@ -47,7 +48,7 @@ class Simulation(Insulation):
 
         res_save = pd.concat([feed_cond, reactor_cond, insulator_cond, res])
         res_save = pd.DataFrame(res_save.values.reshape(1, len(res_save.values)), columns=res_save.index)
-        res_path = 'result/sim2_%s_log.csv' % self.kn_model
+        res_path = 'result/sim3_%s_log.csv' % self.kn_model
         # res_path = self.new_path(res_path)
         print(res)
 
@@ -57,7 +58,7 @@ class Simulation(Insulation):
         except FileNotFoundError:
             res_save.to_csv(res_path, mode='a', index=False, header=True)
 
-        if r > 0.25:
+        if r > 0.35:
             save_data = pd.DataFrame(sim_res.T, columns=self.comp_list + ['T'])
             sim_path = 'result/result_sim_%s_%s_%s_%s_%s_%s_%s_%s_%s.xlsx' \
                        % (self.kn_model, self.status, self.feed_para['CO/CO2'], self.Dt, self.L,
@@ -103,7 +104,6 @@ class Simulation(Insulation):
                 # volume fraction of catalyst
                 r_v_ins_v_react = self.Do ** 2 * self.nit / self.Dt ** 2 / self.nrt if self.location == 'out' else 0
                 delta_diff = self.flux(T, P, F_in)  # simulation of insulator
-
                 # performance of diffusional module
                 performance.append(z)
                 performance.append(T)

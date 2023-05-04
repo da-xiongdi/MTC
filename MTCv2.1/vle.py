@@ -1,10 +1,13 @@
+import time
+import warnings
 import numpy as np
 import pandas as pd
 from CoolProp.CoolProp import PropsSI
-from scipy.optimize import fsolve
+import scipy.optimize as opt
 
-T_gas = 200  # 310.93  # K
-P_gas = 30  # 6.3  # bar
+warnings.filterwarnings('ignore')
+# T_gas = 200  # 310.93  # K
+# P_gas = 30  # 6.3  # bar
 R = 8.314
 
 
@@ -12,8 +15,10 @@ class VLE:
     def __init__(self, T, comp):
         self.T = T
         self.mix = comp / comp.sum()
+
         self.condensate = comp[['Methanol', 'H2O']] / comp[['Methanol', 'H2O']].sum()
         self.num = len(self.mix.index)
+        self.index = pd.Series(np.arange(self.num), index=self.mix.index)
 
         # read properties from coolprop
         [self.Tc, self.Pc, self.Psat, self.Omega] = np.zeros((4, self.num))
@@ -34,42 +39,17 @@ class VLE:
                              [0.0148, 0, 0, -0.0789, 0],
                              [0.0737, 0, -0.0789, 0, 0],
                              [0, 0.0804, 0, 0, 0]])
-        # self.k_a = self.k_a[[2, 3]][:, [2, 3]]
 
-    def para_mix(self, comp):
-        # calculate the mix para in EoS
-        # a_multi = np.matmul(self.a.reshape(num, 1), self.a.reshape(1, num)) ** 0.5 \
-        #           * np.array([[1, 1.0789], [1.0789, 1]])
-        b_mix = np.sum(self.b * comp)
-        a_mix = 0
-        for i in range(self.num):
-            for j in range(self.num):
-                a_mix += comp[i] * comp[j] * (self.a[i] * self.a[j]) ** 0.5 * (1 - self.k_a[i, j])
-        # a_mix = np.matmul(np.matmul(comp.reshape(1, num), a_multi), comp.reshape(num, 1))[0, 0]  # * (1 + 0.0789)
-        return a_mix, b_mix
-
-    def para_mix2(self, comp):
-        # calculate the mix para in EoS
-
+    @staticmethod
+    def para_mix(comp, a, b, kij):
         num = len(comp)
-        # CH3OH H2O
-        alpha = np.array([[0, 0.15], [0.15, 0]])
-        gamma = np.array([[0, 780.1], [-220, 0]])
-        tau = gamma / self.T
-        [numerator, denominator, a_ba] = np.zeros((3, num))
-        for i in range(num):
-            for j in range(num):
-                numerator[i] += tau[j, i] * self.b[j] * comp[j] * np.exp(-alpha[j, i] * tau[j, i])
-                denominator[i] += self.b[j] * comp[j] * np.exp(-alpha[j, i] * tau[j, i])
-            a_ba[i] = self.b[i] * (self.a[i] / self.b[i] - (np.sum(numerator[i] / denominator[i]) +
-                                                            np.sum(-comp * numerator[i] * self.b[i] / denominator[
-                                                                i] ** 2)) * (R * 10) * self.T / np.log(2))
-        factor = np.sum(comp * numerator / denominator)
-
-        b_mix = np.sum(self.b * comp)
-        a_mix = (np.sum(self.a * comp / self.b) - factor * (R * 10) * self.T / np.log(2)) * b_mix  # * (1 - 0.094)
-        # print(a_mix)
-        return a_mix, b_mix, a_ba
+        # calculate the mix para in EoS
+        b_mix = np.sum(b * comp)
+        a_mix = 0
+        for m in range(num):
+            for n in range(num):
+                a_mix += comp[m] * comp[n] * (a[m] * a[n]) ** 0.5 * (1 - kij[m, n])
+        return a_mix, b_mix
 
     @staticmethod
     def func_z(beta, q, status):
@@ -84,51 +64,69 @@ class VLE:
 
             return func
 
-    @property
-    def dew_p(self):
-        comp = np.zeros((2, self.num))
-        comp[0] = self.mix.values
+    @staticmethod
+    def func_v(z, K):
+        def func(x):
+            return np.sum(z * (K - 1) / (1 + x * (K - 1)))
 
-        [a_mix, b_mix, Z_mix, I_mix] = np.zeros((4, 2))
-        [q_ba, a_ba, phi] = np.zeros((3, 2, self.num))
+        return func
+
+    @staticmethod
+    def func_l(z, K):
+        def func(x):
+            return np.sum(z * (1 - K) / (x + (1 - x) * K))
+
+        return func
+
+    def phi(self, comp, P, phase=0):
+        index = self.index[comp.index]
+        num = len(index)
+        a, b = self.a[index], self.b[index]
+        k_mix = self.k_a[index][:, index]
+        [q_ba, a_ba] = np.zeros((2, num))
 
         # the mix para in EoS for vapor phase
-        # a_mix[0], b_mix[0], a_ba[0] = self.para_mix2(comp[0])
-        a_mix[0], b_mix[0] = self.para_mix(comp[0])
+        a_mix, b_mix = self.para_mix(comp, a, b, k_mix)
+        beta_mix = b_mix * P / (R * 10) / self.T
+        q_mix = a_mix / b_mix / (R * 10) / self.T
+        Z_guess = 1e-5 if phase == 1 and num == 2 else 0.5
+        Z_mix = opt.fsolve(self.func_z(beta_mix, q_mix, phase), [Z_guess])[0]
+        Z_mix = 1e-5 if Z_mix < 0 else Z_mix
+        I_mix = np.log((Z_mix + beta_mix) / Z_mix)
+        ln_phi = np.empty(num)
+        for j in range(num):
+            # cycle for each component
+            a_ba[j] = 0
+            for m in range(num):
+                a_ba[j] += (a[j] * a[m]) ** 0.5 * (1 - k_mix[j, m]) * comp[m] * 2
+            a_ba[j] -= a_mix
+            q_ba[j] = q_mix * (1 + a_ba[j] / a_mix - b[j] / b_mix)
+            ln_phi[j] = b[j] * (Z_mix - 1) / b_mix - np.log(Z_mix - beta_mix) - q_ba[j] * I_mix
+        phi = np.exp(ln_phi)
+        return phi
+
+    def dew_p(self, spec, x_guess=None):
+        y = self.mix.iloc[spec] / self.mix.iloc[spec].sum()
+        num = len(y)
+        comp = pd.DataFrame(index=['V', 'L'], columns=y.index)
+        comp.iloc[0] = y.values
 
         # find the equilibrium pressure and mol fraction of liquid phase
-        comp[1] = np.array([0.01, 0.01, 0.2, 0.77, 0.01])  # self.mix.values
-        for P in np.arange(np.min(self.Psat), 80, 0.01):
+        comp.iloc[1] = x_guess if x_guess is not None else y.values
+        P_min = np.min(self.Psat) if len(spec) == 2 else 20
+        for P in np.arange(P_min, 80, 0.05):
             delta_K_sum = 1e5
             K_sum_K_pre = 10
             while delta_K_sum > 0.01:
-                ln_phi = np.empty((2, self.num))
-                # a_mix[1], b_mix[1], a_ba[1] = self.para_mix2(comp[1])
-                a_mix[1], b_mix[1] = self.para_mix(comp[1])
-                beta_mix = b_mix * P / (R * 10) / self.T
-                q_mix = a_mix / b_mix / (R * 10) / self.T
+                phi = np.empty((2, num))
                 for i in range(2):
                     # cycle for each phase
-                    Z_guess = 1e-5 if i == 1 else 0.8
-                    Z_mix[i] = fsolve(self.func_z(beta_mix[i], q_mix[i], status=i), [Z_guess])
-                    I_mix[i] = np.log((Z_mix[i] + beta_mix[i]) / Z_mix[i])
-                    for j in range(self.num):
-                        # cycle for each component
-                        a_ba[i, j] = 0
-                        for m in range(self.num):
-                            a_ba[i, j] += (self.a[j] * self.a[m]) ** 0.5 * (1 - self.k_a[j, m]) * comp[i, m] * 2
-                        a_ba[i, j] -= a_mix[i]
-                        # a_ba[i, j] = (np.sum((self.a[j] * self.a) ** 0.5 * comp[i] * k_mix[i,j]) * 2 - a_mix[i])
-                        q_ba[i, j] = q_mix[i] * (1 + a_ba[i, j] / a_mix[i] - self.b[j] / b_mix[i])
-                        if Z_mix[i] - beta_mix[i] >= 0:
-                            ln_phi[i, j] = self.b[j] * (Z_mix[i] - 1) / b_mix[i] - \
-                                           np.log(Z_mix[i] - beta_mix[i]) - q_ba[i, j] * I_mix[i]
-                        else:
-                            ln_phi[i, j] = 10 if j != 2 or 3 else 0.5
-                phi = np.exp(ln_phi)
+                    phi[i] = self.phi(comp.iloc[i], P, phase=i)
+                    # phi[i] = fi[i] / P / comp.iloc[i].values
                 K = phi[1] / phi[0]
-                K_sum_cal = np.sum(comp[0] / K)
-                comp[1] = comp[0] / K / K_sum_cal
+                if np.isnan(np.sum(K)): return None
+                K_sum_cal = np.sum(comp.iloc[0].values / K)
+                comp.iloc[1] = comp.iloc[0] / K / K_sum_cal
                 delta_K_sum = abs(K_sum_cal - K_sum_K_pre)
                 K_sum_K_pre = K_sum_cal
             if abs(K_sum_cal - 1) < 0.005:
@@ -139,120 +137,40 @@ class VLE:
                 return res
 
     @property
-    def dew_p2(self):
-        comp = np.zeros((2, self.num))
-        comp[0] = self.mix.values
-
-        [a_mix, b_mix, Z_mix, I_mix] = np.zeros((4, 2))
-        [q_ba, a_ba, phi, Z, I_sin] = np.zeros((5, 2, self.num))
-
-        # the mix para in EoS for vapor phase
-        a_mix[0], b_mix[0] = self.para_mix(comp[0])
-
-        # find the equilibrium pressure and mol fraction of liquid phase
-        comp[1] = self.mix.values
-        for P in np.arange(np.min(self.Psat), 50, 0.01):
-            beta = self.b * P / (R * 10) / self.T
-            q = self.a / self.b / (R * 10) / self.T
-            delta_K_sum = 1e5
-            K_sum_pre = 1
-            while delta_K_sum > 0.005:
-                ln_phi = np.empty((2, self.num))
-                a_mix[1], b_mix[1] = self.para_mix(comp[1])
-                beta_mix = b_mix * P / (R * 10) / self.T
-                q_mix = a_mix / b_mix / (R * 10) / self.T
-                Z_guess = 0.8
-                for j in range(self.num):
-                    Z_guess = 0.8
-                    Z[0, j] = fsolve(self.func_z(beta[j], q[j], status=0), [Z_guess])
-                    I_sin[0, j] = np.log((Z[0, j] + beta[j]) / Z[0, j])
-
-                Z_mix[0] = fsolve(self.func_z(beta[i], q_mix[i], status=0), [Z_guess])
-                I_mix[0] = np.log((Z_mix[0] + beta_mix[0]) / Z_mix[0])
-
-                for j in range(self.num):
-                    q_ba[0, j] = (1 - Z[0,])
-                for i in range(2):
-                    # cycle for each phase
-                    Z_guess = 1e-5 if i == 1 else 0.8
-                    Z_mix[i] = fsolve(self.func_z(beta[i], q_mix[i], status=i), [Z_guess])
-                    I_mix[i] = np.log((Z_mix[i] + beta_mix[i]) / Z_mix[i])
-                    for j in range(self.num):
-                        # cycle for each component
-                        Z[i, j] = fsolve(self.func_z(beta[i], q_mix[i], status=i), [Z_guess])
-                        a_ba[i, j] = np.sum((self.a[j] * self.a) ** 0.5 * comp[i]) * 2 - a_mix[i]
-                        q_ba[i, j] = q_mix[i] * (1 + a_ba[i, j] / a_mix[i] - self.b[j] / b_mix[i])
-                        if Z_mix[i] - beta_mix[i] >= 0:
-                            ln_phi[i, j] = self.b[j] * (Z_mix[i] - 1) / b_mix[i] - \
-                                           np.log(Z_mix[i] - beta_mix[i]) - q_ba[i, j] * I_mix[i]
-                        else:
-                            ln_phi[i, j] = -1e10
-                phi = np.exp(ln_phi)
-                K = phi[1] / phi[0]
-                K_sum_cal = np.sum(comp[0] / K)
-                comp[1] = comp[0] / K / K_sum_cal
-                delta_K_sum = abs(K_sum_cal - K_sum_pre)
-                K_sum_pre = K_sum_cal
-            if abs(K_sum_cal - 1) < 0.01:
-                res = {'P': P, "K": K, "phi": phi, "comp": comp}
-                return res
-            elif abs(K_sum_cal - 1) < abs(K_sum_pre - 1):
-                res = {'P': P, "K": K, "phi": phi, "comp": comp}
+    def dew_p_all(self):
+        dew_p_cds = self.dew_p([2, 3])
+        x_guess = np.ones(self.num) * 0.1
+        x_guess[2:4] = (1 - 0.01 * (self.num - 2)) * dew_p_cds['comp'].iloc[1]
+        res = self.dew_p(np.arange(self.num), x_guess)
         return res
 
-    @property
-    def dew_p3(self):
-        comp = np.zeros((2, self.num))
-        comp[0] = self.mix.values
-
-        [a_mix, b_mix, Z_mix, I_mix] = np.zeros((4, 2))
-        [q_ba, a_ba, phi] = np.zeros((3, 2, self.num))
-
-        # the mix para in EoS for vapor phase
-        a_mix[0], b_mix[0] = self.para_mix(comp[0])
-
-        # find the equilibrium pressure and mol fraction of liquid phase
-        comp[1] = self.mix.values
-        for P in np.arange(np.min(self.Psat), 50, 0.01):
-            delta_K_sum = 1e5
-            K_sum_pre = 1
-            while delta_K_sum > 0.005:
-                ln_phi = np.empty((2, self.num))
-                a_mix[1], b_mix[1] = self.para_mix(comp[1])
-                beta_mix = b_mix * P / (R * 10) / self.T
-                q_mix = a_mix / b_mix / (R * 10) / self.T
-                for i in range(2):
-                    # cycle for each phase
-                    Z_guess = 1e-5 if i == 1 else 0.8
-                    Z_mix[i] = fsolve(self.func_z(beta_mix[i], q_mix[i], status=i), [Z_guess])
-                    I_mix[i] = np.log((Z_mix[i] + beta_mix[i]) / Z_mix[i])
-                    for j in range(self.num):
-                        # cycle for each component
-                        a_ba[i, j] = (np.sum((self.a[j] * self.a) ** 0.5 * comp[i]) * 2 - a_mix[i])  # * (1 - 0.094)
-                        q_ba[i, j] = q_mix[i] * (1 + a_ba[i, j] / a_mix[i] - self.b[j] / b_mix[i])
-                        if Z_mix[i] - beta_mix[i] >= 0:
-                            ln_phi[i, j] = self.b[j] * (Z_mix[i] - 1) / b_mix[i] - \
-                                           np.log(Z_mix[i] - beta_mix[i]) - q_ba[i, j] * I_mix[i]
-                        else:
-                            ln_phi[i, j] = -1e10
-                phi = np.exp(ln_phi)
-                K = phi[1] / phi[0]
-                K_sum_cal = np.sum(comp[0] / K)
-                comp[1] = comp[0] / K / K_sum_cal
-                delta_K_sum = abs(K_sum_cal - K_sum_pre)
-                K_sum_pre = K_sum_cal
-            if abs(K_sum_cal - 1) < 0.01:
-                res = {'P': P, "K": K, "phi": phi, "comp": comp}
-                return res
-            elif abs(K_sum_cal - 1) < abs(K_sum_pre - 1):
-                res = {'P': P, "K": K, "phi": phi, "comp": comp}
-        return res
+    def flash(self, P):
+        comp = pd.DataFrame(index=['V', 'L'], columns=self.mix.index)
+        fi = np.zeros((2, self.num))
+        fi[1] = 1
+        K = np.exp(5.37 * (1 + self.Omega) * (1 - 1 / (self.T / self.Tc))) / (P / self.Pc)
+        m = 0
+        while np.sum(abs(fi[0] - fi[1])) > 1e-5:
+            vol = opt.fsolve(self.func_l(self.mix.values, K), 1e-3)[0]
+            comp.iloc[1] = self.mix.values / (vol + (1 - vol) * K)
+            comp.iloc[0] = K * comp.iloc[1]
+            fi[0] = self.phi(comp.iloc[0], P, 0) * P * comp.iloc[0]
+            fi[1] = self.phi(comp.iloc[1], P, 1) * P * comp.iloc[1]
+            K = fi[1] * K / fi[0]
+            m += 1
+        return comp
 
 
-# exp = [0.209330615, 0.670652596, 0.028540247, 0.043940264]
-# ['CO2', 'H2', 'Methanol', 'H2O'] ['CO2', 'H2', 'Methanol', 'H2O', 'CO'] 'CO2', 'Methanol', 'H2O']
-exp = [0.209059763, 0.669913119, 0.029543594, 0.043759505, 0.047724019]
-mix = pd.Series(exp, index=['CO2', 'H2', 'Methanol', 'H2O', 'CO'])  # 'Methane', 'Butane' 'N2', 'Methane'
-aa = VLE(T=323.15, comp=mix)
-
-print(aa.dew_p)
+# # exp = [0.209330615, 0.670652596, 0.028540247, 0.043940264]
+# # ['CO2', 'H2', 'Methanol', 'H2O'] ['CO2', 'H2', 'Methanol', 'H2O', 'CO'] 'CO2', 'Methanol', 'H2O']
+# a = time.time()
+# exp = [0.243889,0.731673,0.000021,0.000023,0.024394]
+# exp = [0.240200, 0.722865, 0.005017, 0.006150, 0.025768]
+# # # #[0.209059763, 0.669913119, 0.029543594, 0.043759505, 0.047724019]
+# mix = pd.Series(exp, index=['CO2', 'H2', 'Methanol', 'H2O', 'CO'])  # 'Methane', 'Butane' 'N2', 'Methane'
+# aa = VLE(T=333.15, comp=mix)
+# # # #
+# print(aa.flash(70))
+# print(aa.dew_p_all)
+# b=time.time()
+# print(b-a)
