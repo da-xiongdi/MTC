@@ -1,9 +1,6 @@
-import json
 import numpy as np
-import scipy
 from CoolProp.CoolProp import PropsSI
 import pandas as pd
-from matplotlib import pyplot as plt
 
 R = 8.314  # J/mol/K
 ks, vof = 0.2, 0.8
@@ -36,6 +33,7 @@ class Reaction:
         # feed gas parameter
         self.feed_para = feed_para
         self.F0 = np.zeros(len(self.comp_list))  # component of feed gas, mol/s; ndarray
+
         self.P0, self.T0 = self.feed_para["P"], self.feed_para["T"]  # P0 bar, T0 K
         # volumetric flux per tube from space velocity
         self.sv = self.feed_para["Sv"]

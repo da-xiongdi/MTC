@@ -5,7 +5,7 @@ import scipy
 from insulator import Insulation
 import numpy as np
 import pandas as pd
-from vle import VLE
+from CoolProp.CoolProp import PropsSI
 
 
 class Simulation(Insulation):
@@ -24,6 +24,49 @@ class Simulation(Insulation):
         except FileNotFoundError:
             path = path
         return path
+
+    @staticmethod
+    def mixer(F1, T1, F2, T2, P, species):
+        """
+        ideal mixer
+        ref: Modelling, Estimation and Optimization of the Methanol Synthesis with Catalyst Deactivation
+        :param F1: component of input gas 1, mol/s; ndarray
+        :param T1: temperature of input gas 1, K
+        :param F2: component of input gas 2, mol/s; ndarray
+        :param T2: temperature of input gas 2, K
+        :param P: pressure of input gas, bar
+        :param species: component of input gas, list
+        :return: molar flux of components, temperature
+        """
+        num = len(species)
+        F_in = np.vstack((F1, F2))
+        T_in = np.array([T1, T2])
+        Pi_in = np.zeros((2, num))
+        Pi_in[0] = P * F1 / np.sum(F1) * 1e5
+        Pi_in[1] = P * F2 / np.sum(F2) * 1e5
+        H_in = np.zeros((2, num))
+        for i in range(2):
+            for j in range(num):
+                # J/mol
+                H_in[i, j] = PropsSI('HMOLAR', 'T', T_in[i], 'P', Pi_in[i, j], species[j]) if Pi_in[i, j] != 0 else 0
+        H_t = np.sum(H_in * F_in)  # J
+
+        F_out = F1 + F2
+        Pi_out = P * F_out / np.sum(F_out) * 1e5
+        H_o = np.zeros(num)
+        H_diff = 100000
+        for T in np.arange(min(T1, T2), max(T1, T2), 0.1):
+            for i in range(num):
+                H_o[i] = PropsSI('HMOLAR', 'T', T, 'P', Pi_out[i], species[i]) if Pi_out[i] != 0 else 0
+            H_o_t = np.sum(H_o * F_out)
+            cal_diff = abs(H_o_t - H_t)
+            if cal_diff < H_diff:
+                H_diff = cal_diff
+                T_out = T
+            if cal_diff / H_t < 0.01:
+                T_out = T
+                break
+        return F_out, T_out
 
     def save_data(self, sim_res, diff_res):
 
@@ -48,8 +91,7 @@ class Simulation(Insulation):
 
         res_save = pd.concat([feed_cond, reactor_cond, insulator_cond, res])
         res_save = pd.DataFrame(res_save.values.reshape(1, len(res_save.values)), columns=res_save.index)
-        res_path = 'result/sim3_%s_log.csv' % self.kn_model
-        # res_path = self.new_path(res_path)
+        res_path = 'result/sim_recycle_%s_log.csv' % self.kn_model
         print(res)
 
         try:
@@ -82,9 +124,11 @@ class Simulation(Insulation):
                 except FileNotFoundError:
                     save_performance.to_excel(per_path)
 
-    def simulator(self):
+    def sin_pass(self, F_in, T_in):
         """
         simulation for CO2 TO CH3OH
+        :param F_in: feed gas, mol/s; ndarray
+        :param T_in: input temperature, K
         :return: concentration and its slop
         """
 
@@ -92,10 +136,10 @@ class Simulation(Insulation):
         performance = []
 
         def model(z, y):
-            # y= [F_CO2, F_H2, F_CH3OH, F_H2O, F_CO, F_N2, T]
-            F_in = np.array(y[:-1])
+            # y= [F_CO2, F_H2, F_CH3OH, F_H2O, F_CO, T]
+            F = np.array(y[:-1])
             T = y[-1]
-            delta_react = self.balance(T, P, F_in)  # simulation of reactor
+            delta_react = self.balance(T, P, F)  # simulation of reactor
             # convert reaction rate per length to per kg catalyst
             dl2dw = np.pi * ((self.Dt ** 2) / 4) * self.rhoc * self.phi
 
@@ -103,7 +147,7 @@ class Simulation(Insulation):
                 # the module insulator is on
                 # volume fraction of catalyst
                 r_v_ins_v_react = self.Do ** 2 * self.nit / self.Dt ** 2 / self.nrt if self.location == 'out' else 0
-                delta_diff = self.flux(T, P, F_in)  # simulation of insulator
+                delta_diff = self.flux(T, P, F)  # simulation of insulator
                 # performance of diffusional module
                 performance.append(z)
                 performance.append(T)
@@ -120,21 +164,37 @@ class Simulation(Insulation):
             return np.append(dF_dz, [dT_dz])
 
         z_span = [0, self.L]
-        ic = np.append(self.F0, [self.T0])
+        ic = np.append(F_in, [T_in])
+        # ic = np.append(self.F0, [self.T0])
         res = scipy.integrate.solve_ivp(model, z_span, ic, method='BDF', t_eval=np.linspace(0, self.L, 1000))
         data = res.y
         self.save_data(data, performance)
 
         return data, performance
 
-# a = pd.Series([0, 1, 2], index=['a', 'b', 'c'])
-# # # print(a.index.tolist())
-# # a = pd.DataFrame(a.values.reshape(1,3),  columns=['a', 'b', 'c'])
-# # print(a)
-# # a.to_csv('result/t1.csv')
-# path = "D:/document/04Code/PycharmProjects/MTC/MTCv2.1/result/result_diff_on_0.03_10_503_45_343_0.00196.xlsx"
-#
-# # a.to_excel(path)
-# with pd.ExcelWriter(path,engine='openpyxl', mode='a', if_sheet_exists='new') as writer:
-#     # 写入数据
-#     a.to_excel(writer)
+    def recycler(self, ratio):
+        F_fresh = self.F0
+        T_fresh = self.T0
+        F_in, T_in = self.F0, self.T0
+        # [F_CO2, F_H2, F_CH3OH, F_H2O, F_CO, T]
+        res = np.zeros((100, len(self.comp_list)+1))
+        for n in range(100):
+            res[n] = self.sin_pass(F_in, T_in)[0][:,-1]
+            F_sin_out, T_sin_out = res[n][:-1], res[n][-1]
+            F_diff_cal = np.abs(res[n][:-1] - res[n-1][:-1])/res[n-1][:-1]
+            if np.max(F_diff_cal) < 0.01:
+                break
+            F_re = F_sin_out*ratio
+            F_re[2:4] = 0
+            F_in, T_in = self.mixer(F_fresh, T_fresh, F_re, T_sin_out, self.P0, self.comp_list)
+
+        res_pd = pd.DataFrame(res, columns=['F_CO2', 'F_H2', 'F_CH3OH', 'F_H2O', 'F_CO', 'T'])
+        res_pd.to_csv('result/recycle.csv')
+
+
+# F_1 = np.array([0.078202587,0.207183322,0.021855522,0.007696604,0.018958482])
+# F_2 = np.array([0.130682804,0.392048413,0,0,0.032670701])
+# T_1 = 506.1447305
+# T_2 = 533
+# gas = ['CO2','H2','Methanol','H2O','CO']
+# print(Simulation.mixer(F_1, T_1, F_2, T_2, 50, gas))
