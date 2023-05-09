@@ -55,17 +55,20 @@ class Simulation(Insulation):
         Pi_out = P * F_out / np.sum(F_out) * 1e5
         H_o = np.zeros(num)
         H_diff = 100000
-        for T in np.arange(min(T1, T2), max(T1, T2), 0.1):
-            for i in range(num):
-                H_o[i] = PropsSI('HMOLAR', 'T', T, 'P', Pi_out[i], species[i]) if Pi_out[i] != 0 else 0
-            H_o_t = np.sum(H_o * F_out)
-            cal_diff = abs(H_o_t - H_t)
-            if cal_diff < H_diff:
-                H_diff = cal_diff
-                T_out = T
-            if cal_diff / H_t < 0.01:
-                T_out = T
-                break
+        if abs(T1 - T2) < 0.2:
+            T_out = (T1 + T2) / 2
+        else:
+            for T in np.arange(min(T1, T2), max(T1, T2), 0.1):
+                for i in range(num):
+                    H_o[i] = PropsSI('HMOLAR', 'T', T, 'P', Pi_out[i], species[i]) if Pi_out[i] != 0 else 0
+                H_o_t = np.sum(H_o * F_out)
+                cal_diff = abs(H_o_t - H_t)
+                if cal_diff < H_diff:
+                    H_diff = cal_diff
+                    T_out = T
+                if cal_diff / H_t < 0.01:
+                    T_out = T
+                    break
         return F_out, T_out
 
     def save_data(self, sim_res, diff_res):
@@ -92,7 +95,7 @@ class Simulation(Insulation):
         res_save = pd.concat([feed_cond, reactor_cond, insulator_cond, res])
         res_save = pd.DataFrame(res_save.values.reshape(1, len(res_save.values)), columns=res_save.index)
         res_path = 'result/sim_recycle_%s_log.csv' % self.kn_model
-        print(res)
+        # print(res)
 
         try:
             with open(res_path) as f:
@@ -100,10 +103,10 @@ class Simulation(Insulation):
         except FileNotFoundError:
             res_save.to_csv(res_path, mode='a', index=False, header=True)
 
-        if r > 0.35:
+        if r > 0.05:
             save_data = pd.DataFrame(sim_res.T, columns=self.comp_list + ['T'])
-            sim_path = 'result/result_sim_%s_%s_%s_%s_%s_%s_%s_%s_%s.xlsx' \
-                       % (self.kn_model, self.status, self.feed_para['CO/CO2'], self.Dt, self.L,
+            sim_path = 'result/result_sim_%s_%s_%s_%s_%s_%s_%s_%s.xlsx' \
+                       % (self.kn_model, self.status, self.Dt, self.L,
                           self.T0, self.P0, self.Tc, self.sv)
             # sim_path = self.new_path(sim_path)
             try:
@@ -124,13 +127,16 @@ class Simulation(Insulation):
                 except FileNotFoundError:
                     save_performance.to_excel(per_path)
 
-    def sin_pass(self, F_in, T_in):
+    def sin_pass(self, F_in=None, T_in=None):
         """
         simulation for CO2 TO CH3OH
         :param F_in: feed gas, mol/s; ndarray
         :param T_in: input temperature, K
         :return: concentration and its slop
         """
+        if F_in is None:
+            F_in = self.F0
+            T_in = self.T0
 
         P = self.P0
         performance = []
@@ -175,26 +181,52 @@ class Simulation(Insulation):
     def recycler(self, ratio):
         F_fresh = self.F0
         T_fresh = self.T0
-        F_in, T_in = self.F0, self.T0
+        F_re0, T_re0 = np.zeros_like(self.F0), self.T0
+        F_re0[:2] = 0.8 * self.F0[:2] * 2
+        F_re0[2:4] = 0  # 0.2 * self.F0[0] * (1 - 0.6)
+        F_re0[4] = 0.05 * self.F0[0] * 2
         # [F_CO2, F_H2, F_CH3OH, F_H2O, F_CO, T]
-        res = np.zeros((100, len(self.comp_list)+1))
-        for n in range(100):
-            res[n] = self.sin_pass(F_in, T_in)[0][:,-1]
-            F_sin_out, T_sin_out = res[n][:-1], res[n][-1]
-            F_diff_cal = np.abs(res[n][:-1] - res[n-1][:-1])/res[n-1][:-1]
-            if np.max(F_diff_cal) < 0.01:
-                break
-            F_re = F_sin_out*ratio
-            F_re[2:4] = 0
-            F_in, T_in = self.mixer(F_fresh, T_fresh, F_re, T_sin_out, self.P0, self.comp_list)
 
-        res_pd = pd.DataFrame(res, columns=['F_CO2', 'F_H2', 'F_CH3OH', 'F_H2O', 'F_CO', 'T'])
-        res_pd.to_csv('result/recycle.csv')
+        F_diff = 1e5
+        i = 1
+        while F_diff > 0.1:
+            print('%sth iteration' % i)
+            F_in0, T_in0 = self.mixer(F_fresh, T_fresh, F_re0, T_re0, self.P0, self.comp_list)
+            res0 = self.sin_pass(F_in0, T_in0)[0][:, -1]
+            F_sin_out, T_sin_out = res0[:-1], res0[-1]
+            F_re_cal0 = F_sin_out * ratio
+            F_re_cal0[2:4] = 0
 
+            F_re1, T_re1 = F_re_cal0, self.T0
+            F_in1, T_in1 = self.mixer(F_fresh, T_fresh, F_re1, T_re1, self.P0, self.comp_list)
+            res1 = self.sin_pass(F_in1, T_in1)[0][:, -1]
+            F_sin_out, T_sin_out = res1[:-1], res1[-1]
+            F_re_cal1 = F_sin_out * ratio
+            F_re_cal1[2:4] = 0
+            w = (F_re_cal1 - F_re_cal0) / (F_re1 - F_re0)
+            w[np.isnan(w)] = 0
+            q = w / (w - 1)
+            q[q > 0], q[q < -5] = -0.5, -5
+            F_re0 = q * F_re1 + (1 - q) * F_re_cal1
+            T_re0 = self.T0
 
-# F_1 = np.array([0.078202587,0.207183322,0.021855522,0.007696604,0.018958482])
-# F_2 = np.array([0.130682804,0.392048413,0,0,0.032670701])
-# T_1 = 506.1447305
-# T_2 = 533
-# gas = ['CO2','H2','Methanol','H2O','CO']
+            diff = np.abs(F_re_cal1 - F_re1) / F_re1
+            diff[np.isnan(diff)] = 0
+            F_diff = np.max(diff)
+            i += 1
+
+        res_pd = pd.Series(res1, index=['F_CO2', 'F_H2', 'F_CH3OH', 'F_H2O', 'F_CO', 'T'])
+        res_pd.to_csv('result/recycle5.csv')
+
+# F_1 = np.array([0.331076816, 1.10260401, 0.043283834, 0.074548673, 0.062756616])
+# F_2 = np.array([0.16302695,0.48908084,0,0,0])
+# T_1 = 528
+# T_2 = 503
+# gas = ['CO2', 'H2', 'Methanol', 'H2O', 'CO']
 # print(Simulation.mixer(F_1, T_1, F_2, T_2, 50, gas))
+
+# a = np.array([1, 2, 3, 4])
+# b = np.zeros_like(a)
+# b[0:2] = a[2:]
+# print(b)
+# print(a)

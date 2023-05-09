@@ -174,3 +174,11 @@ class VLE:
 # print(aa.dew_p_all)
 # b=time.time()
 # print(b-a)
+
+a = [9.761762132,34.27631344,1.566465771,1.71562863,2.679830027]
+b = np.array([0.828404546,2.908763139,0.132933721,0.145592009,0.227416254])
+
+mix = pd.Series(b, index=['CO2', 'H2', 'Methanol', 'H2O', 'CO'])
+
+aa = VLE(T=318, comp=mix)
+print(aa.flash(P=50))

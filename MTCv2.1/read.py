@@ -48,29 +48,38 @@ class ReadData:
         self.insulator_para = in_data['reactor']["insulator"]
 
         # feed gas parameter
-        self.feed_para = in_data['feed']["condition"]
+        self.feed_para = in_data['feed']
 
     @property
     def feed_data(self):
 
-        # data from json
-        H2_CO2 = self.feed_para["H2/CO2"]
-        recycle = 0 if self.feed_para["recycle"] == 'on' else 1
+        if self.feed_para["condition"]["recycle"] == 'off':
+            feed = self.feed_para["condition"]
+            # data from json
+            H2_CO2 = feed["H2/CO2"]
+            recycle = 1
 
-        # feed para frame
-        T0_array = self.data_array(self.feed_para["T"])
-        P0_array = self.data_array(self.feed_para["P"])
-        sv_array = self.data_array(self.feed_para["Sv"])
-        CO_CO2_array = self.data_array(self.feed_para['CO/CO2'])
-        feed_num = len(T0_array) * len(P0_array) * len(sv_array) * len(CO_CO2_array)
-        feed_para = pd.DataFrame(index=np.arange(feed_num), columns=list(self.feed_para.keys()))
-        i = 0
-        for T in T0_array:
-            for P in P0_array:
-                for sv in sv_array:
-                    for CO_CO2 in CO_CO2_array:
-                        feed_para.iloc[i] = np.array([T, P, recycle, H2_CO2, CO_CO2, sv])
-                        i += 1
+            # feed para frame
+            T0_array = self.data_array(feed["T"])
+            P0_array = self.data_array(feed["P"])
+            sv_array = self.data_array(feed["Sv"])
+            CO_CO2_array = self.data_array(feed['CO/CO2'])
+            feed_num = len(T0_array) * len(P0_array) * len(sv_array) * len(CO_CO2_array)
+            feed_para = pd.DataFrame(index=np.arange(feed_num), columns=list(feed.keys()))
+            i = 0
+            for T in T0_array:
+                for P in P0_array:
+                    for sv in sv_array:
+                        for CO_CO2 in CO_CO2_array:
+                            feed_para.iloc[i] = np.array([T, P, recycle, H2_CO2, CO_CO2, sv])
+                            i += 1
+        else:
+            feed = np.array([float(i) for i in self.feed_para["feed"].split('\t')])
+            T = self.feed_para["condition"]['T'][0]
+            P = self.feed_para["condition"]['P'][0]
+            feed = np.append(np.array([T, P, 0]), feed)
+            feed_para = pd.DataFrame(feed.reshape(1, 8),
+                                     columns=['T', 'P', 'recycle', "CO2", "H2", "Methanol", "H2O", "CO"])
         return feed_para
 
     @property
@@ -223,7 +232,6 @@ class ReadData:
         }
         chem_data = {"stoichiometry": stoichiometry, "kad": kad, "kr": kr, "keq": self.keq, 'heat_reaction': self.hr}
         return chem_data
-
 
 # data = ReadData(kn_model='BU')
 # # print(data.feed_para.keys())

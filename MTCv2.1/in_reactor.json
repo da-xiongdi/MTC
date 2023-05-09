@@ -9,7 +9,7 @@
   "insulator": {
     "status": "off",
     "Din": [0.05],
-    "Thick":0.015,
+    "Thick":0.02,
     "nit": 1,
     "Tc": [343],
     "io": "in"

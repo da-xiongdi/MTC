@@ -8,7 +8,8 @@ ks, vof = 0.2, 0.8
 
 class Reaction:
     """
-    simulation of adiabatic reactor for conversion of CO2 to CH3OH
+    basic simulation of CO2 to CH3OH
+    energy and mass balance are calculated
     """
 
     def __init__(self, reactor_para, chem_para, feed_para):
@@ -32,20 +33,23 @@ class Reaction:
 
         # feed gas parameter
         self.feed_para = feed_para
-        self.F0 = np.zeros(len(self.comp_list))  # component of feed gas, mol/s; ndarray
-
         self.P0, self.T0 = self.feed_para["P"], self.feed_para["T"]  # P0 bar, T0 K
-        # volumetric flux per tube from space velocity
-        self.sv = self.feed_para["Sv"]
-        self.v0 = self.sv * self.L * np.pi * self.Dt ** 2 / 4 / 3600 / self.nrt  # volumetric flux per tube, m3/s
 
-        self.Ft0 = self.P0 * 1e5 * self.v0 / R / self.T0  # total flux of feed,mol/s
         if self.feed_para["recycle"] == 1:  # fresh stream
-            self.F0[0] = 1 / (1 + 1*self.feed_para["H2/CO2"] + self.feed_para['CO/CO2'] + self.feed_para['CO/CO2'] * 0) * self.Ft0
+            self.F0 = np.zeros(len(self.comp_list))  # component of feed gas, mol/s; ndarray
+            # volumetric flux per tube from space velocity
+            self.sv = self.feed_para["Sv"]
+            self.v0 = self.sv * self.L * np.pi * self.Dt ** 2 / 4 / 3600 / self.nrt  # volumetric flux per tube, m3/s
+            self.Ft0 = self.P0 * 1e5 * self.v0 / R / self.T0  # total flux of feed,mol/s
+
+            self.F0[0] = 1 / (1 + 1 * self.feed_para["H2/CO2"] + self.feed_para['CO/CO2']) * self.Ft0
             self.F0[4] = self.F0[0] * self.feed_para['CO/CO2']
             self.F0[1] = self.Ft0 - self.F0[0] - self.F0[4]
-        elif self.feed_para["recycle"] == 0:  # recycled stream
-            self.F0 = np.array([float(i) for i in self.feed_para["feed"].split('\t')])
+        else:  # recycled stream
+            self.F0 = self.feed_para[self.comp_list].to_numpy()
+            self.Ft0 = np.sum(self.F0)
+            self.v0 = self.Ft0 * R * self.T0 / (self.P0 * 1e5)
+            self.sv = self.v0 * self.nrt*3600*4/self.L/np.pi/self.Dt**2
 
     @staticmethod
     def react_H(T, in_dict):
@@ -196,7 +200,6 @@ class Reaction:
         # compute the reaction rate for each component in every reaction
         react_comp_rate = self.react_sto * np.repeat(react_rate, 5).reshape(self.react_num, 5)
         react_comp_rate = np.vstack((react_comp_rate, np.sum(react_comp_rate, axis=0).T))
-        # react_comp_rate = np.hstack((react_comp_rate, np.array([0, 0, 0, 0]).reshape(4, 1)))
 
         return react_comp_rate
 
@@ -238,53 +241,4 @@ class Reaction:
 
         return dF_react[-1], dT
 
-# a = [343, 0.012360681152337636, 0.0039033729954750422, 0.03]
-# b = [524.5764062395502, 0.012489109102363472, 0.030998751112742237, 0.015]
-# c = [63.685662602388845, 35.503136000940216, 4.5e-05, 1.4e-05, 0.2930081289718913]
-# ysol = reactor.ode_multi(b, a, 50, c, 0.6)
-#
-# xsol = np.linspace(0.015, 0.03, 200)
-# # ysol = res.sol(xsol)
-# fig, axe = plt.subplots(2, 2)
-# # [xc, xd, Nd, T, dTdz]
-# axe[0][0].plot(xsol, ysol[0])
-# axe[0][0].plot(xsol, ysol[1])
-# axe[0][0].legend(["CH3OH", "H2O"])
-# axe[0][1].plot(xsol, ysol[2])
-# axe[1][0].plot(xsol, ysol[3])
-# axe[1][1].plot(xsol, ysol[4])
-# plt.show()
-#
-# print(ysol[1][0],ysol[1][-1])
-# print(ysol[1][-1] - b[2])
-# print(ysol[1][0] - a[2])
-# c1 = [550.9956251927392, 0.006494309709190364, 0.016514917211696244, 0.035]
-# c2 = [353, 0, 0, 0.015]
-# c3 = [58.02352864647421, 35.9547344923201, 4.5e-05, 1.4e-05, 0.31750891539283604]
-# r = 0.14
 
-
-# gap = 1e5
-# for r in np.arange(0, 2, 0.01):
-#     res = ode_multi(c2, c1, 50, c3, r)
-#     temp = abs(res[1][-1] - c1[2])
-#     if temp < gap:
-#         r_sel = r
-#         gap = temp
-#
-# print(r_sel, gap)
-# ode_multi(c2, c1, 50, c3, r=1.25)
-
-# T = 93+273
-# print(PropsSI('P', 'T', T, 'Q', 1, 'Ammonia'))
-# mix_liquid = 'HEOS::H2O[0.9]&Ammonia[0.1]'#'HEOS::NH3[%s]&H2O[%s]' % (0.1, 0.9)
-# Pl_sat = PropsSI('P', 'T', T, 'Q', 1, mix_liquid)
-# print(Pl_sat)
-
-# for i in np.arange(350,380):
-#     a.append(PropsSI('P', 'T', i, 'Q', 1, 'Methanol'))
-#     b.append(PropsSI('P', 'T', i, 'Q', 1, 'H2O'))
-#
-# plt.plot(np.arange(350,380),a)
-# plt.plot(np.arange(350,380),b)
-# plt.show()

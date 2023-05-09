@@ -20,7 +20,9 @@ for i in range(feed_data.shape[0]):
 
             sim = Simulation(reactor_data.iloc[j], chem_data, feed_data.iloc[i],
                              insulator_data.iloc[k], r_CH3OH_H2O=1)
-            sim.recycler(ratio=0.8)
+            sim.recycler(ratio=0.99)
+            # sim.sin_pass()
+            # sim.recycler(ratio=0.99)
             n += 1
 
 b = time.time()
