@@ -19,9 +19,9 @@ for i in range(feed_data.shape[0]):
             insulator_data['Din'].iloc[k] = reactor_data['Dt'].iloc[j]
 
             sim = Simulation(reactor_data.iloc[j], chem_data, feed_data.iloc[i],
-                             insulator_data.iloc[k], r_CH3OH_H2O=1)
-            sim.recycler(ratio=0.99)
-            # sim.sin_pass()
+                             insulator_data.iloc[k])
+            # sim.recycler(ratio=0.99)
+            sim.sim(save_profile=1)
             # sim.recycler(ratio=0.99)
             n += 1
 

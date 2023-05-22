@@ -89,7 +89,7 @@ class VLE:
         a_mix, b_mix = self.para_mix(comp, a, b, k_mix)
         beta_mix = b_mix * P / (R * 10) / self.T
         q_mix = a_mix / b_mix / (R * 10) / self.T
-        Z_guess = 1e-5 if phase == 1 and num == 2 else 0.5
+        Z_guess = 1e-5 if phase == 1 else 0.8
         Z_mix = opt.fsolve(self.func_z(beta_mix, q_mix, phase), [Z_guess])[0]
         Z_mix = 1e-5 if Z_mix < 0 else Z_mix
         I_mix = np.log((Z_mix + beta_mix) / Z_mix)
@@ -113,7 +113,7 @@ class VLE:
 
         # find the equilibrium pressure and mol fraction of liquid phase
         comp.iloc[1] = x_guess if x_guess is not None else y.values
-        P_min = np.min(self.Psat) if len(spec) == 2 else 20
+        P_min = np.min(self.Psat) if len(spec) == 2 else 48
         for P in np.arange(P_min, 80, 0.05):
             delta_K_sum = 1e5
             K_sum_K_pre = 10
@@ -129,7 +129,7 @@ class VLE:
                 comp.iloc[1] = comp.iloc[0] / K / K_sum_cal
                 delta_K_sum = abs(K_sum_cal - K_sum_K_pre)
                 K_sum_K_pre = K_sum_cal
-            if abs(K_sum_cal - 1) < 0.005:
+            if abs(K_sum_cal - 1) < 0.01:
                 res = {'P': P, "K": K, "phi": phi, "comp": comp}
                 return res
             elif K_sum_cal > 1:
@@ -139,8 +139,8 @@ class VLE:
     @property
     def dew_p_all(self):
         dew_p_cds = self.dew_p([2, 3])
-        x_guess = np.ones(self.num) * 0.1
-        x_guess[2:4] = (1 - 0.01 * (self.num - 2)) * dew_p_cds['comp'].iloc[1]
+        x_guess = np.ones(self.num) * 0.005
+        x_guess[2:4] = (1 - 0.005 * (self.num - 2)) * dew_p_cds['comp'].iloc[1]
         res = self.dew_p(np.arange(self.num), x_guess)
         return res
 
@@ -159,26 +159,3 @@ class VLE:
             K = fi[1] * K / fi[0]
             m += 1
         return comp
-
-
-# # exp = [0.209330615, 0.670652596, 0.028540247, 0.043940264]
-# # ['CO2', 'H2', 'Methanol', 'H2O'] ['CO2', 'H2', 'Methanol', 'H2O', 'CO'] 'CO2', 'Methanol', 'H2O']
-# a = time.time()
-# exp = [0.243889,0.731673,0.000021,0.000023,0.024394]
-# exp = [0.240200, 0.722865, 0.005017, 0.006150, 0.025768]
-# # # #[0.209059763, 0.669913119, 0.029543594, 0.043759505, 0.047724019]
-# mix = pd.Series(exp, index=['CO2', 'H2', 'Methanol', 'H2O', 'CO'])  # 'Methane', 'Butane' 'N2', 'Methane'
-# aa = VLE(T=333.15, comp=mix)
-# # # #
-# print(aa.flash(70))
-# print(aa.dew_p_all)
-# b=time.time()
-# print(b-a)
-
-a = [9.761762132,34.27631344,1.566465771,1.71562863,2.679830027]
-b = np.array([0.828404546,2.908763139,0.132933721,0.145592009,0.227416254])
-
-mix = pd.Series(b, index=['CO2', 'H2', 'Methanol', 'H2O', 'CO'])
-
-aa = VLE(T=318, comp=mix)
-print(aa.flash(P=50))

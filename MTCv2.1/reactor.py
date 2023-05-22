@@ -20,6 +20,7 @@ class Reaction:
         self.nrt = self.react_para['nrt']  # number of the reaction tube
         self.phi = self.react_para["phi"]  # void of fraction
         self.rhoc = self.react_para["rhoc"]  # density of catalyst, kg/m3
+        self.recycle = self.react_para['recycle']  # reactor with recycle or not
 
         # prescribed chem data of reaction
         self.comp_list = ["CO2", "H2", "Methanol", "H2O", "CO"]
@@ -35,7 +36,7 @@ class Reaction:
         self.feed_para = feed_para
         self.P0, self.T0 = self.feed_para["P"], self.feed_para["T"]  # P0 bar, T0 K
 
-        if self.feed_para["recycle"] == 1:  # fresh stream
+        if self.feed_para["fresh"] == 1:  # the feed to the plant is fresh stream
             self.F0 = np.zeros(len(self.comp_list))  # component of feed gas, mol/s; ndarray
             # volumetric flux per tube from space velocity
             self.sv = self.feed_para["Sv"]
@@ -49,7 +50,7 @@ class Reaction:
             self.F0 = self.feed_para[self.comp_list].to_numpy()
             self.Ft0 = np.sum(self.F0)
             self.v0 = self.Ft0 * R * self.T0 / (self.P0 * 1e5)
-            self.sv = self.v0 * self.nrt*3600*4/self.L/np.pi/self.Dt**2
+            self.sv = self.v0 * self.nrt * 3600 * 4 / self.L / np.pi / self.Dt ** 2
 
     @staticmethod
     def react_H(T, in_dict):
@@ -98,6 +99,90 @@ class Reaction:
         for key, value in in_dict["kr"].items():
             react_rate_constant[key] = value[0] * np.exp(value[1] / T / R)
         return react_rate_constant
+
+    @staticmethod
+    def mixture_property(T, Pi_gas):
+        """
+        calculate the properties of gas mixture
+        :param T: gas temperature, K
+        :param Pi_gas: partial pressure, bar; pd.Serize
+        :return: thermal conductivity W/(m K), viscosity Pa s, heat capacity J/mol/K; pd.series
+        """
+        # prepare data for calculation
+        n = len(Pi_gas.index)  # number of gas species
+        Pt = np.sum(Pi_gas.values)
+
+        [cp, k, vis, M, rho] = np.ones((5, n)) * 1e-5
+        mol_fraction = Pi_gas.values / Pt  # mol fraction of gases
+        Pi_gas = Pi_gas * 1e5  # convert bar to pa
+        Ti_sat = pd.Series(np.ones(n) * 100, index=Pi_gas.index)
+        if 'Methanol' in Pi_gas.index:
+            Ti_sat['Methanol'] = PropsSI('T', 'P', Pi_gas['Methanol'], 'Q', 1, 'Methanol')
+        if "H2O" in Pi_gas.index:
+            Ti_sat['H2O'] = PropsSI('T', 'P', Pi_gas['H2O'], 'Q', 1, 'H2O')
+
+        i = 0
+        # calculate the properties of pure gases
+        for comp in Pi_gas.index:
+            gas = "N2" if comp == "CO" else comp  # "CO" is not available in CoolProp
+            if Pi_gas[comp] > 1000:
+                if T > Ti_sat[comp]:
+                    # thermal conductivity, W/(m K)
+                    k[i] = PropsSI('L', 'T', T, 'P', Pt, gas)
+                    # viscosity, Pa S
+                    vis[i] = PropsSI('V', 'T', T, 'P', Pt, gas)
+                    # heat capacity, J/(mol K)
+                    cp[i] = PropsSI('CPMOLAR', 'T', T, 'P', Pt, gas)
+                    # density, kg/m3
+                    rho[i] = PropsSI('D', 'T', T, 'P', Pi_gas[comp], gas)
+                else:
+                    cp[i] = PropsSI('CPMOLAR', 'T', T, 'Q', 1, gas)
+                    k[i] = PropsSI('L', 'T', T, 'Q', 1, gas)
+                    vis[i] = PropsSI('V', 'T', T, 'Q', 1, gas)
+                    rho[i] = PropsSI('D', 'T', T, 'Q', 1, gas)
+
+            # molar weight, g/mol
+            M[i] = PropsSI('MOLARMASS', 'T', T, 'P', 1e5, gas)
+            i += 1
+
+        # calculate the properties of mixture
+        cp_m = np.sum(cp * mol_fraction)
+        rho_m = np.sum(rho)
+        phi, denominator = np.ones((n, n)), np.ones((n, n))  # Wilke coefficient
+        vis_m, k_m = 0, 0
+        for i in range(n):
+            for j in np.arange(n):
+                phi[i, j] = (1 + (vis[i] / vis[j]) ** 0.5 * (M[j] / M[i]) ** 0.25) ** 2 / (8 * (1 + M[i] / M[j])) ** 0.5
+                denominator[i, j] = mol_fraction[j] * phi[i, j]  #if i != j else 0
+            vis_m += mol_fraction[i] * vis[i] / np.sum(denominator[i])
+            k_m += mol_fraction[i] * k[i] / np.sum(denominator[i])
+        return pd.Series([k_m, vis_m, rho_m, cp[2], cp[3], cp_m],
+                         index=["k", "vis", 'rho', 'cp_' + Pi_gas.index[2], 'cp_' + Pi_gas.index[3], "cp_m"])
+
+    def convection(self, T, P, F_dict):
+        """
+        :param T: temperature of reactor gas, K
+        :param P: pressure of reactor, bar
+        :param F_dict: molar flow rate of each component, mol/s; ndarray
+        :return: convection heat transfer coefficient, W/m2 K
+        """
+        Ft = np.sum(F_dict)
+        Pi = F_dict / Ft * P
+        mix_property = self.mixture_property(T, pd.Series(Pi, self.comp_list))
+        M = 0.25 * 44 + 0.75 * 2
+        Pr = mix_property['vis'] * (mix_property['cp_m'] / (M / 1000)) / mix_property['k']
+        v = self.v0 * (self.P0 / P) * (T / self.T0) * (Ft / self.Ft0)  # m3/s
+        u = v / (np.pi * self.Dt ** 2 / 4)
+        Re = u * self.Dt * mix_property['rho'] / mix_property['vis']
+        if Re > 1e4:
+            Nu = 0.0265 * Re ** 0.8 * Pr ** 0.3
+        elif 2300 < Re < 1e4:
+            f = (0.79 * np.log(Re) - 1.64) ** -2
+            Nu = f / 8 * (Re - 1000) * Pr / (1 + 12.7 * (f / 8) ** 0.5 * (Pr ** (2 / 3) - 1))
+        elif Re < 2300:
+            Nu = 3.66
+        h = Nu * mix_property['k'] / self.Dt # W/m K
+        return h
 
     def rate_bu(self, T, Pi):
         """
@@ -238,7 +323,32 @@ class Reaction:
             cp = PropsSI('CPMOLAR', 'T', T, 'P', Pi[i] * 1e5, self.comp_list[i]) if Pi[i] > 0 else 0
             heat_capacity += cp * F_dict[i]
         dT = dH * 1e3 / heat_capacity  # K/kg_cat
+        res = {
+            'mflux': dF_react[-1],
+            'hflux': dH * 1e3,
+            'Tvar': dT
+        }
+        return res  # dF_react[-1], dT
 
-        return dF_react[-1], dT
 
-
+# F = np.array([0.062228879, 0.198288202, 0.009296752, 0.012506192, 0.012891983])
+# comp = ['CO2', 'H2', 'Methanol', 'H2O', 'CO']
+# T = 529
+# P = 70
+#
+# from read import ReadData
+#
+# # prepare data for the simulation
+# in_data = ReadData(kn_model='BU')
+# reactor_data = in_data.reactor_data
+# feed_data = in_data.feed_data
+# chem_data = in_data.chem
+# insulator_data = in_data.insulator_data
+#
+# for i in range(feed_data.shape[0]):
+#     for j in range(reactor_data.shape[0]):
+#         for k in range(insulator_data.shape[0]):
+#             insulator_data['Din'].iloc[k] = reactor_data['Dt'].iloc[j]
+#
+#             a = Reaction(reactor_data.iloc[j], chem_data, feed_data.iloc[i])
+#             a.convection(T, P, F, comp)

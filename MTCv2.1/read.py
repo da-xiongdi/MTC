@@ -53,9 +53,8 @@ class ReadData:
     @property
     def feed_data(self):
 
-        if self.feed_para["condition"]["recycle"] == 'off':
+        if self.feed_para["condition"]["fresh"] == 'on':
             feed = self.feed_para["condition"]
-            # data from json
             H2_CO2 = feed["H2/CO2"]
             recycle = 1
 
@@ -78,15 +77,15 @@ class ReadData:
             T = self.feed_para["condition"]['T'][0]
             P = self.feed_para["condition"]['P'][0]
             feed = np.append(np.array([T, P, 0]), feed)
-            feed_para = pd.DataFrame(feed.reshape(1, 8),
-                                     columns=['T', 'P', 'recycle', "CO2", "H2", "Methanol", "H2O", "CO"])
+            feed_para = pd.DataFrame(feed.reshape(1, len(feed)),
+                                     columns=['T', 'P', 'fresh', "CO2", "H2", "Methanol", "H2O", "CO"])
         return feed_para
 
     @property
     def insulator_data(self):
         # insulator parameters
 
-        status = 0 if self.insulator_para['status'] == 'on' else 1
+        status = 1 if self.insulator_para['status'] == 'on' else 0
         location = 0 if self.insulator_para["io"] == 'in' else 1
         nit = self.insulator_para["nit"]  # tube number of the insulator
         Thick = self.insulator_para['Thick']
@@ -94,16 +93,14 @@ class ReadData:
         # insulator para frame
         Din_array = self.data_array(self.insulator_para['Din'])
         Tc_array = self.data_array(self.insulator_para['Tc'])
-        if status == 'off':
-            insulator_para = self.insulator_para
-        else:
-            insulator_num = len(Tc_array)
-            insulator_para = pd.DataFrame(index=np.arange(insulator_num), columns=list(self.insulator_para.keys()))
-            i = 0
-            # for Din in Din_array:
-            for Tc in Tc_array:
-                insulator_para.iloc[i] = [status, 0, Thick, nit, Tc, location]
-                i += 1
+
+        insulator_num = len(Tc_array)
+        insulator_para = pd.DataFrame(index=np.arange(insulator_num), columns=list(self.insulator_para.keys()))
+        i = 0
+        # for Din in Din_array:
+        for Tc in Tc_array:
+            insulator_para.iloc[i] = [status, 0, Thick, nit, Tc, location]
+            i += 1
 
         return insulator_para
 
@@ -113,6 +110,7 @@ class ReadData:
         nrt = self.react_para['nrt']  # number of the reaction tube
         phi = self.react_para["phi"]  # void of fraction
         rhoc = self.react_para["rhoc"]  # density of catalyst, kg/m3
+        recycle = 1 if self.react_para['recycle'] == "on" else 0
 
         # reactor para frame
         Dt_array = self.data_array(self.react_para['Dt'])
@@ -120,7 +118,7 @@ class ReadData:
         react_para = pd.DataFrame(index=np.arange(reactor_num), columns=list(self.react_para.keys()))
         i = 0
         for Dt in Dt_array:
-            react_para.iloc[i] = [L, Dt, nrt, rhoc, phi]
+            react_para.iloc[i] = [L, Dt, nrt, rhoc, phi, recycle]
             i += 1
         return react_para
 
