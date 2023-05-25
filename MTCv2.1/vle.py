@@ -25,6 +25,10 @@ class VLE:
         for i in range(self.num):
             self.Tc[i] = PropsSI('Tcrit', comp.index[i])
             self.Pc[i] = PropsSI('Pcrit', comp.index[i]) * 1e-5
+            # try:
+            #     PropsSI('P', 'T', self.T, 'Q', 1, comp.index[i])
+            # except ValueError:
+            #     print(self.T)
             self.Psat[i] = PropsSI('P', 'T', self.T, 'Q', 1, comp.index[i]) * 1e-5 if self.T < self.Tc[i] else 1e5
             self.Omega[i] = PropsSI('acentric', comp.index[i])
         # calculate para in Eos for each component
@@ -114,7 +118,7 @@ class VLE:
         # find the equilibrium pressure and mol fraction of liquid phase
         comp.iloc[1] = x_guess if x_guess is not None else y.values
         P_min = np.min(self.Psat) if len(spec) == 2 else 48
-        for P in np.arange(P_min, 80, 0.05):
+        for P in np.arange(P_min, 70, 0.05):
             delta_K_sum = 1e5
             K_sum_K_pre = 10
             while delta_K_sum > 0.01:

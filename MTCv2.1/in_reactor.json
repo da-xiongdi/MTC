@@ -1,19 +1,12 @@
 {
   "reactor": {
     "L": 10,
-    "Dt":[0.03, 0.04],
+    "Dt":[0.03],
     "nrt": 1,
     "rhoc": 1950,
     "phi": 0.67,
-    "recycle": "off"
-  },
-  "insulator": {
-    "status": "on",
-    "Din": [0.03, 0.04],
-    "Thick":0.015,
-    "nit": 1,
-    "Tc": [333],
-    "io": "in"
+    "recycle": "on",
+    "Uc": 0
   },
   "unit": {
     "L": "m",
@@ -21,6 +14,8 @@
     "nt": "-,number of tube",
     "rhoc": "kg/m3",
     "phi": "-,vof",
-    "io": "in:reaction in the insides of insulator; out:inverse"
+    "io": "in:reaction in the insides of insulator; out:inverse",
+    "Uc": "W/m2 K",
+    "qm": "mol/s"
   }
 }

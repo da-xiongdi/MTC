@@ -21,46 +21,6 @@ class Insulation(Reaction):
         self.Din = self.Dt  # self.insulator_para['Din']
         # print(self.Din)
         self.Do = self.Din + self.insulator_para['Thick'] * 2
-        self.Tc = self.insulator_para['Tc']
-
-    @staticmethod
-    def cold_comp(Pi_in, P_sat_out):
-        """
-        calculate the partial pressure of each gas in the cold side
-        :param Pi_in: partial pressure of each gas in the hot side, bar;ndarray
-        :param P_sat_out: saturated pressure of condensates in the cold side, bar;ndarray
-        :return: partial pressure of each gas at Tc, bar; ndarray
-        """
-        P_t = np.sum(Pi_in)
-        xi_in = Pi_in / P_t
-        xi_ncon = np.delete(xi_in, [2, 3])
-        xi_ncon = xi_ncon / np.sum(xi_ncon)
-        Pi_ncon_out = (P_t - np.sum(P_sat_out)) * xi_ncon
-        Pi_out = np.insert(Pi_ncon_out, 2, P_sat_out)
-        return Pi_out
-
-    @staticmethod
-    def p_sat(T, xi, dx=0.01):
-        """
-        calculate the saturated pressure of condensates for liquid with specific ratio
-        :param T: temperature, K
-        :param xi: molar ratio of CH3OH in liquid
-        :param dx: step size of xi in the calculation
-        :return: saturated pressure of condensate, bar; ndarray
-        """
-        mix_liquid = 'HEOS::Methanol[%s]&H2O[%s]' % (xi[0], xi[1])
-        Pl_sat = PropsSI('P', 'T', T, 'Q', 0, mix_liquid)
-        diff_x = 1e5
-        for xg_H2O in np.arange(0, 1, dx):
-            mix_gas = 'HEOS::Methanol[%s]&H2O[%s]' % (1 - xg_H2O, xg_H2O)
-            Pv_sat = PropsSI('P', 'T', T, 'Q', 1, mix_gas)
-            temp = abs(Pl_sat - Pv_sat)
-            if temp < diff_x:
-                xg_H2O_sel = xg_H2O
-                diff_x = temp
-                if diff_x / Pl_sat < 0.05: break
-        pi_v = Pv_sat * np.array([1 - xg_H2O_sel, xg_H2O_sel]) * 1e-5
-        return pi_v
 
     @staticmethod
     def ode_single(inner_cond, outer_cond, P, properties):
@@ -127,8 +87,8 @@ class Insulation(Reaction):
         def model(z, y):
             [xc, xd, Nd, T, dTdz] = y
             Nc = r * Nd
-            D_cm = -(xc*(Nc+Nd)-Nc) / (0.25*Nc / D_ca + 0.75*Nc / D_cb)
-            D_dm = -(xd*(Nc+Nd)-Nd) / (0.25*Nd / D_da + 0.75*Nd / D_db)
+            D_cm = -(xc * (Nc + Nd) - Nc) / (0.25 * Nc / D_ca + 0.75 * Nc / D_cb)
+            D_dm = -(xd * (Nc + Nd) - Nd) / (0.25 * Nd / D_da + 0.75 * Nd / D_db)
             dxc_dz = -Nc / D_cm / (P / R / T)
             dxd_dz = -Nd / D_dm / (P / R / T)
 
@@ -156,9 +116,10 @@ class Insulation(Reaction):
         ysol = np.insert(ysol, 2, ysol[2] * r, axis=0)
         return ysol
 
-    def flux(self, Th, P, F_dict):
+    def flux(self, Th, P, F_dict, Tc):
         """
         calculate the diffusional flux
+        :param Tc: temperature of water in the cold side of reactor, K
         :param Th: temperature of gas in the reactor, K
         :param P: pressure of gas in the reactor, bar
         :param F_dict: gas component in the reactor, mol/s; ndarray
@@ -176,7 +137,7 @@ class Insulation(Reaction):
         # calculate the partial pressure
         Pi_h = pd.Series(Pi, index=self.comp_list, dtype="float")  # pressure of gases in the reactor, bar
         xi_h = Pi_h / P
-        if xi_h["Methanol"] < 3e-3:
+        if xi_h["Methanol"] < 3e-3 or xi_h['H2O'] < 1e-3:
             # if there is no reacted gas, end the calculation
             res = {
                 "mflux": np.zeros(len(self.comp_list)),
@@ -187,24 +148,26 @@ class Insulation(Reaction):
             return res
 
         # vle calculation, determine the dew pressure
-        vle = VLE(self.Tc, comp=xi_h)
+        vle = VLE(Tc, comp=xi_h)
         # print(vle.dew_p_all, vle.dew_p([2,3])['P']/(xi_h["Methanol"] + xi_h['H2O']))
-        P_dew = vle.dew_p_all['P']
-        # print(P_dew) vle.dew_p([2,3])['P']/(xi_h["Methanol"] + xi_h['H2O']) if vle.dew_p_all is None else
+        # P_dew = vle.dew_p([2, 3])['P'] / (xi_h["Methanol"] + xi_h['H2O']) * 1.1  # vle.dew_p_all['P']
+        P_dew_temp = vle.dew_p_all
+        P_dew = vle.dew_p([2, 3])['P']*1.4 / (xi_h["Methanol"] + xi_h['H2O']) if P_dew_temp is None else P_dew_temp['P']
+        # print(Tc, P_dew_temp,P_dew)
         if P < P_dew:
             qcv_delta = 1e5
             Tw = Th - 0.1
             while qcv_delta > 20:
                 # condensation does not occur
                 # gas properties inside the insulator
-                mix_pro_ave = self.mixture_property((self.Tc + Tw) / 2, Pi_h)
+                mix_pro_ave = self.mixture_property((Tc + Tw) / 2, Pi_h)
                 k_e = mix_pro_ave["k"] * vof + ks * (1 - vof)  # effective heat conductivity of the insulator
 
                 # heat conduction along the insulator
-                qcv_cond = -2 * np.pi * k_e * (self.Tc - Tw) / np.log(radium[1 - self.location] / radium[self.location])
+                qcv_cond = -2 * np.pi * k_e * (Tc - Tw) / np.log(radium[1 - self.location] / radium[self.location])
                 # heat convection inside the reactor
                 qcv_conv = -self.convection(Th, P, F_dict) * radium[self.location] * 2 * np.pi * (Tw - Th)
-                qcv_delta = 5 #abs(qcv_cond - qcv_conv)
+                qcv_delta = 5  # abs(qcv_cond - qcv_conv)
                 Tw -= 1
             # temperature variation inside the reactor
             property_h = self.mixture_property(Th, Pi_h)
@@ -227,13 +190,13 @@ class Insulation(Reaction):
             Tw = Th - 0.1
             while qcv_delta > 20:
                 # gas properties inside the insulator
-                property_c = self.mixture_property(self.Tc, Pi_c)
+                property_c = self.mixture_property(Tc, Pi_c)
                 property_w = self.mixture_property(Tw, Pi_h)
                 mix_pro_ave = (property_w + property_c) / 2
                 k_e = mix_pro_ave["k"] * vof + ks * (1 - vof)  # effective heat conductivity of the insulator
 
                 # calculate the diffusional flux inside the insulator
-                cold_cond = [self.Tc, xi_c["Methanol"], xi_c["H2O"], radium[1 - self.location]]
+                cold_cond = [Tc, xi_c["Methanol"], xi_c["H2O"], radium[1 - self.location]]
                 hot_cond = [Th, xi_h["Methanol"], xi_h["H2O"], radium[self.location]]
                 cond_list = [hot_cond, cold_cond]
                 cal_property = [mix_pro_ave["cp_Methanol"], mix_pro_ave["cp_H2O"], 4.5e-5, 1.4e-5, k_e]
@@ -248,7 +211,7 @@ class Insulation(Reaction):
                 qcv_cond = -k_e * ode_res[5][-self.location] * radium[-self.location] * 2 * np.pi
                 # heat convection inside the reactor
                 qcv_conv = -self.convection(Th, P, F_dict) * radium[self.location] * 2 * np.pi * (Tw - Th)
-                qcv_delta = 5 # abs(qcv_cond - qcv_conv)
+                qcv_delta = 5  # abs(qcv_cond - qcv_conv)
                 Tw -= 1
                 # print(Th, Tw, qcv_cond, qcv_conv)
             gap_min = ode_res[1][-1] - cond_list[self.location - 1][2]
@@ -280,7 +243,6 @@ class Insulation(Reaction):
             }
         return res  # dF, dT * h_phi, dev
 
-
 # P = np.array([0.25, 0.75]) * 50
 # comp = ['CO2', 'H2']
 # P = pd.Series(P, index=comp)
@@ -294,8 +256,8 @@ class Insulation(Reaction):
 #     :param outer_cond: temperature, molar fraction, and radius at outside; list
 # [cp, D, k] = properties
 
-a = [373, 0.1, 0.03]
-b = [313, 0.048, 0.04]
+# a = [373, 0.1, 0.03]
+# b = [313, 0.048, 0.04]
 
 # def ode_multi(inner_cond, outer_cond, P, properties):
 #     """

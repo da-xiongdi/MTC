@@ -2,6 +2,7 @@ import time
 
 from read import ReadData
 from simulator import Simulation
+
 a = time.time()
 model = 'BU'
 
@@ -20,10 +21,8 @@ for i in range(feed_data.shape[0]):
 
             sim = Simulation(reactor_data.iloc[j], chem_data, feed_data.iloc[i],
                              insulator_data.iloc[k])
-            # sim.recycler(ratio=0.99)
-            sim.sim(save_profile=1)
-            # sim.recycler(ratio=0.99)
+            sim.sim(series=0, save_profile=1)
             n += 1
 
 b = time.time()
-print(b-a)
+print(b - a)

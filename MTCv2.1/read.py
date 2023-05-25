@@ -30,7 +30,7 @@ class ReadData:
         # data path for reactor and feed gas
         self.root_path = sys.path[0]
         if in_path is None:
-            in_path = {'reactor': 'in_reactor.json', 'feed': 'in_feed.json'}
+            in_path = {'reactor': 'in_reactor.json', 'feed': 'in_feed.json', 'insulator': "in_insulator.json"}
         in_data = dict()
         for key, values in in_path.items():
             try:
@@ -42,10 +42,10 @@ class ReadData:
                     in_data[key] = json.load(f)
 
         # reactor parameters
-        self.react_para = in_data['reactor']["reactor"]
+        self.react_para = in_data["reactor"]["reactor"]
 
         # insulator parameters
-        self.insulator_para = in_data['reactor']["insulator"]
+        self.insulator_para = in_data["insulator"]["insulator"]
 
         # feed gas parameter
         self.feed_para = in_data['feed']
@@ -89,9 +89,10 @@ class ReadData:
         location = 0 if self.insulator_para["io"] == 'in' else 1
         nit = self.insulator_para["nit"]  # tube number of the insulator
         Thick = self.insulator_para['Thick']
+        qm = self.insulator_para['qm']
 
         # insulator para frame
-        Din_array = self.data_array(self.insulator_para['Din'])
+        Din_array = self.data_array(self.insulator_para['Din']) # Din should be same with the Dt of reactor
         Tc_array = self.data_array(self.insulator_para['Tc'])
 
         insulator_num = len(Tc_array)
@@ -99,7 +100,7 @@ class ReadData:
         i = 0
         # for Din in Din_array:
         for Tc in Tc_array:
-            insulator_para.iloc[i] = [status, 0, Thick, nit, Tc, location]
+            insulator_para.iloc[i] = [status, 0, Thick, nit, Tc, location, qm]
             i += 1
 
         return insulator_para
@@ -110,6 +111,7 @@ class ReadData:
         nrt = self.react_para['nrt']  # number of the reaction tube
         phi = self.react_para["phi"]  # void of fraction
         rhoc = self.react_para["rhoc"]  # density of catalyst, kg/m3
+        Uc = self.react_para["Uc"]  # total heat transfer coefficient of the reactor, W/m2 K
         recycle = 1 if self.react_para['recycle'] == "on" else 0
 
         # reactor para frame
@@ -118,7 +120,7 @@ class ReadData:
         react_para = pd.DataFrame(index=np.arange(reactor_num), columns=list(self.react_para.keys()))
         i = 0
         for Dt in Dt_array:
-            react_para.iloc[i] = [L, Dt, nrt, rhoc, phi, recycle]
+            react_para.iloc[i] = [L, Dt, nrt, rhoc, phi, recycle, Uc]
             i += 1
         return react_para
 

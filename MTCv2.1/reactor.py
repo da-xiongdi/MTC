@@ -21,6 +21,7 @@ class Reaction:
         self.phi = self.react_para["phi"]  # void of fraction
         self.rhoc = self.react_para["rhoc"]  # density of catalyst, kg/m3
         self.recycle = self.react_para['recycle']  # reactor with recycle or not
+        self.Uc = self.react_para['Uc']  # total heat transfer coefficient of reactor, W/m2 K, 0 means adiabatic
 
         # prescribed chem data of reaction
         self.comp_list = ["CO2", "H2", "Methanol", "H2O", "CO"]
@@ -119,8 +120,10 @@ class Reaction:
         if 'Methanol' in Pi_gas.index:
             Ti_sat['Methanol'] = PropsSI('T', 'P', Pi_gas['Methanol'], 'Q', 1, 'Methanol')
         if "H2O" in Pi_gas.index:
-            Ti_sat['H2O'] = PropsSI('T', 'P', Pi_gas['H2O'], 'Q', 1, 'H2O')
-
+            try:
+                Ti_sat['H2O'] = PropsSI('T', 'P', Pi_gas['H2O'], 'Q', 1, 'H2O')
+            except ValueError:
+                Ti_sat['H2O'] = 300
         i = 0
         # calculate the properties of pure gases
         for comp in Pi_gas.index:
@@ -153,7 +156,7 @@ class Reaction:
         for i in range(n):
             for j in np.arange(n):
                 phi[i, j] = (1 + (vis[i] / vis[j]) ** 0.5 * (M[j] / M[i]) ** 0.25) ** 2 / (8 * (1 + M[i] / M[j])) ** 0.5
-                denominator[i, j] = mol_fraction[j] * phi[i, j]  #if i != j else 0
+                denominator[i, j] = mol_fraction[j] * phi[i, j]  # if i != j else 0
             vis_m += mol_fraction[i] * vis[i] / np.sum(denominator[i])
             k_m += mol_fraction[i] * k[i] / np.sum(denominator[i])
         return pd.Series([k_m, vis_m, rho_m, cp[2], cp[3], cp_m],
@@ -181,7 +184,7 @@ class Reaction:
             Nu = f / 8 * (Re - 1000) * Pr / (1 + 12.7 * (f / 8) ** 0.5 * (Pr ** (2 / 3) - 1))
         elif Re < 2300:
             Nu = 3.66
-        h = Nu * mix_property['k'] / self.Dt # W/m K
+        h = Nu * mix_property['k'] / self.Dt  # W/m K
         return h
 
     def rate_bu(self, T, Pi):
@@ -325,13 +328,13 @@ class Reaction:
         dT = dH * 1e3 / heat_capacity  # K/kg_cat
         res = {
             'mflux': dF_react[-1],
+            'tc': heat_capacity,
             'hflux': dH * 1e3,
             'Tvar': dT
         }
-        return res  # dF_react[-1], dT
+        return res
 
-
-# F = np.array([0.062228879, 0.198288202, 0.009296752, 0.012506192, 0.012891983])
+    # F = np.array([0.062228879, 0.198288202, 0.009296752, 0.012506192, 0.012891983])
 # comp = ['CO2', 'H2', 'Methanol', 'H2O', 'CO']
 # T = 529
 # P = 70
