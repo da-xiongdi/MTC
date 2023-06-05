@@ -151,8 +151,12 @@ class Insulation(Reaction):
         vle = VLE(Tc, comp=xi_h)
         # print(vle.dew_p_all, vle.dew_p([2,3])['P']/(xi_h["Methanol"] + xi_h['H2O']))
         # P_dew = vle.dew_p([2, 3])['P'] / (xi_h["Methanol"] + xi_h['H2O']) * 1.1  # vle.dew_p_all['P']
-        P_dew_temp = vle.dew_p_all
-        P_dew = vle.dew_p([2, 3])['P']*1.4 / (xi_h["Methanol"] + xi_h['H2O']) if P_dew_temp is None else P_dew_temp['P']
+        P_sat_CH3OH = PropsSI('P', 'T', Tc, 'Q', 1, "Methanol")
+        P_sat_H2O = PropsSI('P', 'T', Tc, 'Q', 1, "H2O")
+        P_dew = (1/(xi_h["Methanol"]/P_sat_CH3OH+xi_h['H2O']/P_sat_H2O))*1e-5
+        # print(P_dew)
+        # P_dew_temp = vle.dew_p_all
+        # P_dew = vle.dew_p([2, 3])['P'] / (xi_h["Methanol"] + xi_h['H2O']) if P_dew_temp is None else P_dew_temp['P']
         # print(Tc, P_dew_temp,P_dew)
         if P < P_dew:
             qcv_delta = 1e5

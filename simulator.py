@@ -14,6 +14,7 @@ class Simulation(Insulation):
         self.status = self.insulator_para['status']
         self.Tc = self.insulator_para['Tc']
         self.qm_w = self.insulator_para['qm']
+        self.q_v = self.insulator_para['q']
 
     @staticmethod
     def mixer(F1, T1, F2, T2, P, species):
@@ -106,6 +107,7 @@ class Simulation(Insulation):
         status = self.status if status is None else status
         L = self.L if L is None else L
         P = self.P0
+        latent_heat = PropsSI('HMOLAR', 'P', 1e5, 'Q', self.q_v, "water") - PropsSI('HMOLAR', 'P', 1e5, 'Q', 0, "water")
 
         def model(z, y):
             # y= [F_CO2, F_H2, F_CH3OH, F_H2O, F_CO, Tr, Tc, q_react, q_diff]
@@ -128,7 +130,8 @@ class Simulation(Insulation):
 
             dF_dz = res_react['mflux'] * dl2dw * (1 - r_v_ins_v_react) * self.nrt + res_diff["mflux"] * self.nit
             dTr_dz = res_react["Tvar"] * dl2dw * (1 - r_v_ins_v_react) * self.nrt + res_diff["Tvar"] * self.nit + cooler
-            dTc_dz = -(res_diff['hflux'] * self.nit - cooler * res_react['tc']) / self.qm_w / 78  # 0.8
+            dTc_dz = -(res_diff['hflux'] * self.nit - cooler * res_react['tc']) / self.qm_w / 76 \
+                if y[-1] > (latent_heat * self.qm_w) else 0  # 0.8
             dq_rea_dz = res_react["hflux"] * dl2dw * (1 - r_v_ins_v_react) * self.nrt
             dq_dif_dz = res_diff['hflux'] * self.nit + cooler * res_react['tc']
             return np.append(dF_dz, np.array([dTr_dz, dTc_dz, dq_rea_dz, dq_dif_dz]))
@@ -147,9 +150,11 @@ class Simulation(Insulation):
         res_profile[0] = np.hstack((np.linspace(0, L1, 1000), np.linspace(0, L2, 1000) + L1))
         return res_profile
 
-    def recycler(self, ratio=0.99, series=0, status=None):
+    def recycler(self, ratio=0.99, series=0, status=None, loop='direct'):
         """
         solve the recycle loop using Wegstein convergence method
+        :param loop: direct loop means the recycled gas is mixed with fresh feed directly
+        :param series: 0 means single reactor, 1 means dual reactors in series
         :param ratio: ratio of reacted gas used to recycle
         :param status: status of insulator, 1 or 0
         :return:
@@ -165,13 +170,16 @@ class Simulation(Insulation):
         # update the recycle stream using Wegstein method
         # ref: Abrol, et. al, Computers & Chemical Engineering, 2012
         F_diff = 1e5
-        while F_diff > 0.1:
+        while F_diff > 0.01:
             print(F_re0, T_re0)
             F_in0, T_in0 = self.mixer(F_fresh, T_fresh, F_re0, T_re0, self.P0, self.comp_list)
             res0 = self.one_pass(status=status, F_in=F_in0, T_in=T_in0) if series == 0 else \
                 self.dual_reactor(F_in0, T_in0, L1=1, L2=3)
             F_re_cal0 = res0[:, -1][1:6] * ratio
-            T_re_cal0 = res0[:, -1][6] if status == 1 else self.T0
+            if loop == 'direct':
+                T_re_cal0 = res0[:, -1][6] if status == 1 else self.T0  # self.T0  #
+            elif loop == 'indirect':
+                T_re_cal0 = self.T0
             F_re_cal0[2:4] = 0 if status == 0 else F_re_cal0[2:4]
 
             F_re1, T_re1 = F_re_cal0, T_re_cal0
@@ -179,7 +187,7 @@ class Simulation(Insulation):
             res1 = self.one_pass(status=status, F_in=F_in1, T_in=T_in1) if series == 0 \
                 else self.dual_reactor(F_in1, T_in1, L1=1, L2=3)
             F_re_cal1 = res1[:, -1][1:6] * ratio
-            T_re_cal1 = res1[:, -1][6] if status == 1 else self.T0
+            T_re_cal1 = res1[:, -1][6] if status == 1 else self.T0  # self.T0  #
             F_re_cal1[2:4] = 0 if status == 0 else F_re_cal1[2:4]
 
             # convergence criteria
@@ -193,37 +201,41 @@ class Simulation(Insulation):
             q_F = w_F / (w_F - 1)
             q_F[q_F > 0], q_F[q_F < -5] = -0.5, -5
 
-            w_T = (T_re_cal1 - T_re_cal0) / (T_re1 - T_re0) if status == 1 else 0
-            q_T = w_T / (w_T - 1)
-            q_T = -0.5 if q_T > 0 else q_T
-            q_T = -5 if q_T < -5 else q_T
+            if loop == 'direct':
+                w_T = (T_re_cal1 - T_re_cal0) / (T_re1 - T_re0) if status == 1 else 0
+                q_T = w_T / (w_T - 1)
+                q_T = -0.5 if q_T > 0 else q_T
+                q_T = -5 if q_T < -5 else q_T
+                T_re0 = q_T * T_re1 + (1 - q_T) * T_re_cal1
+            elif loop == 'indirect':
+                T_re0 = self.T0
             F_re0 = q_F * F_re1 + (1 - q_F) * F_re_cal1
+            F_re0[F_re0 < 0] = 0
 
             # F_in_temp, T_in_temp = self.mixer(F_fresh, T_fresh, F_re0, T_re0, self.P0, self.comp_list)
             # r_CO_CO2 = F_re0[4] / (F_re0[0] + F_fresh[0])
             # F_re0[4] = (F_re0[0] + F_fresh[0]) * 0.1 if r_CO_CO2 < 0.1 else F_re0[4]
-            T_re0 = q_T * T_re1 + (1 - q_T) * T_re_cal1
 
         return res1, F_re_cal1
 
-    def sim(self, series=0, save_profile=0):
+    def sim(self, series=0, save_profile=0, loop='direct'):
 
         feed_cond = pd.Series(self.feed_para)
         reactor_cond = pd.Series(self.react_para)
         insulator_cond = pd.Series(self.insulator_para)
 
         if self.recycle == 1:
-            res_profile, F_recycle = self.recycler(series=series)
+            res_profile, F_recycle = self.recycler(series=series, loop=loop)
             ratio = np.sum(F_recycle) / self.Ft0
             p_metric = pd.Series(ratio, index=['ratio'])
             r_metric = self.reactor_metric(res_profile)
             metric = pd.concat([p_metric, r_metric])
-            res_path = 'result/sim_recycle_%s_log.csv' % self.kn_model
+            res_path = 'result/sim_recycle_%s_log.xlsx' % self.kn_model
         else:
             res_profile = self.one_pass() if series == 0 else self.dual_reactor(self.F0, self.T0, L1=1, L2=4)
             r_metric = self.reactor_metric(res_profile)
             metric = r_metric
-            res_path = 'result/sim_one_pass_%s_log.csv' % self.kn_model
+            res_path = 'result/sim_one_pass_%s_log.xlsx' % self.kn_model
 
         print(r_metric)
         # concat the input para with the performance metrics
@@ -232,16 +244,21 @@ class Simulation(Insulation):
 
         # save data to the Excel
         try:
-            with open(res_path) as f:
-                res_save.to_csv(res_path, mode='a', index=False, header=False)
+            with pd.ExcelWriter(res_path, engine='openpyxl', mode='a', if_sheet_exists="overlay") as writer:
+                try:
+                    res_saved = pd.read_excel(res_path, sheet_name=loop)
+                    res_save = res_saved.append(res_save, ignore_index=True)
+                    res_save.to_excel(writer, index=False, header=True, sheet_name=loop)
+                except ValueError:
+                    res_save.to_excel(writer, index=False, header=True, sheet_name=loop)
         except FileNotFoundError:
-            res_save.to_csv(res_path, mode='a', index=False, header=True)
+            res_save.to_excel(res_path, index=False, header=True, sheet_name=loop)
         if save_profile == 1:
             save_data = pd.DataFrame(res_profile.T, columns=['z'] + self.comp_list + ['Tr', 'Tc', 'q_react', 'q_diff'])
             sim_path = 'result/sim_profile_%s_%s_%s_%s_%s_%s_%s_%s_%s.xlsx' \
                        % (self.kn_model, self.status, self.recycle, self.Dt, self.L,
                           self.T0, self.P0, self.Tc, self.sv)
-            sheet_name = 'U_%s_qm_%s' % (self.Uc, self.qm_w)
+            sheet_name = 'U_%s_qm_%s_qv_%s' % (self.Uc, self.qm_w, self.q_v)
             try:
                 with pd.ExcelWriter(sim_path, engine='openpyxl', mode='a', if_sheet_exists='new') as writer:
                     save_data.to_excel(writer, index=False, sheet_name=sheet_name)

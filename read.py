@@ -90,9 +90,10 @@ class ReadData:
         nit = self.insulator_para["nit"]  # tube number of the insulator
         Thick = self.insulator_para['Thick']
         qm = self.insulator_para['qm']
+        q = self.insulator_para['q']
 
         # insulator para frame
-        Din_array = self.data_array(self.insulator_para['Din']) # Din should be same with the Dt of reactor
+        Din_array = self.data_array(self.insulator_para['Din'])  # Din should be same with the Dt of reactor
         Tc_array = self.data_array(self.insulator_para['Tc'])
 
         insulator_num = len(Tc_array)
@@ -100,7 +101,7 @@ class ReadData:
         i = 0
         # for Din in Din_array:
         for Tc in Tc_array:
-            insulator_para.iloc[i] = [status, 0, Thick, nit, Tc, location, qm]
+            insulator_para.iloc[i] = [status, 0, Thick, nit, Tc, location, qm, q]
             i += 1
 
         return insulator_para

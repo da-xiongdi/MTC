@@ -5,7 +5,7 @@
     "nrt": 1,
     "rhoc": 1950,
     "phi": 0.67,
-    "recycle": "on",
+    "recycle": "off",
     "Uc": 0
   },
   "unit": {
@@ -15,7 +15,6 @@
     "rhoc": "kg/m3",
     "phi": "-,vof",
     "io": "in:reaction in the insides of insulator; out:inverse",
-    "Uc": "W/m2 K",
-    "qm": "mol/s"
+    "Uc": "W/m2 K"
   }
 }
