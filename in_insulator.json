@@ -15,6 +15,7 @@
     "nit": "-,number of tube",
     "Tc": "K, output temperature of water in the cold side",
     "io": "in:reaction in the insides of insulator; out:inverse",
-    "qm": "mol/s, flux of water in the cold side"
+    "qm": "mol/s, flux of water in the cold side",
+    "q": "-,vapor fraction of water at outside"
   }
 }
