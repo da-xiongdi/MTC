@@ -201,14 +201,16 @@ class Simulation(Insulation):
             q_F = w_F / (w_F - 1)
             q_F[q_F > 0], q_F[q_F < -5] = -0.5, -5
 
-            if loop == 'direct':
+            # if loop == 'direct':
+
+            if loop == 'indirect' and T_re0 < self.T0:
+                T_re0 = self.T0
+            else:
                 w_T = (T_re_cal1 - T_re_cal0) / (T_re1 - T_re0) if status == 1 else 0
                 q_T = w_T / (w_T - 1)
                 q_T = -0.5 if q_T > 0 else q_T
                 q_T = -5 if q_T < -5 else q_T
                 T_re0 = q_T * T_re1 + (1 - q_T) * T_re_cal1
-            elif loop == 'indirect':
-                T_re0 = self.T0
             F_re0 = q_F * F_re1 + (1 - q_F) * F_re_cal1
             F_re0[F_re0 < 0] = 0
 

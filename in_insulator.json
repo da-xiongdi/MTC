@@ -1,8 +1,8 @@
 {
    "insulator": {
     "status": "on",
-    "Din": [0.03],
-    "Thick":0.01,
+    "Din": [0.04],
+    "Thick":0.02,
     "nit": 1,
     "Tc": [308.15],
     "io": "in",
