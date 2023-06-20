@@ -62,6 +62,7 @@ class ReadData:
             T0_array = self.data_array(feed["T"])
             P0_array = self.data_array(feed["P"])
             sv_array = self.data_array(feed["Sv"])
+            H2_array = self.data_array(feed['H2'])
             CO_CO2_array = self.data_array(feed['CO/CO2'])
             feed_num = len(T0_array) * len(P0_array) * len(sv_array) * len(CO_CO2_array)
             feed_para = pd.DataFrame(index=np.arange(feed_num), columns=list(feed.keys()))
@@ -70,8 +71,9 @@ class ReadData:
                 for P in P0_array:
                     for sv in sv_array:
                         for CO_CO2 in CO_CO2_array:
-                            feed_para.iloc[i] = np.array([T, P, recycle, H2_CO2, CO_CO2, sv])
-                            i += 1
+                            for H2 in H2_array:
+                                feed_para.iloc[i] = np.array([T, P, recycle, H2_CO2, CO_CO2, H2, sv])
+                                i += 1
         else:
             feed = np.array([float(i) for i in self.feed_para["feed"].split('\t')])
             T = self.feed_para["condition"]['T'][0]
@@ -99,10 +101,10 @@ class ReadData:
         insulator_num = len(Tc_array)
         insulator_para = pd.DataFrame(index=np.arange(insulator_num), columns=list(self.insulator_para.keys()))
         i = 0
-        # for Din in Din_array:
-        for Tc in Tc_array:
-            insulator_para.iloc[i] = [status, 0, Thick, nit, Tc, location, qm, q]
-            i += 1
+        for Din in Din_array:
+            for Tc in Tc_array:
+                insulator_para.iloc[i] = [status, Din, Thick, nit, Tc, location, qm, q]
+                i += 1
 
         return insulator_para
 

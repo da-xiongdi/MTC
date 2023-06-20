@@ -121,24 +121,26 @@ class Simulation(Insulation):
             if status == 1:
                 # the module insulator is on
                 # volume fraction of catalyst
-                r_v_ins_v_react = self.Do ** 2 * self.nit / self.Dt ** 2 / self.nrt if self.location == 'out' else 0
+                r_v_ins_v_react = self.Do ** 2 * self.nit / self.Dt ** 2 / self.nrt if self.location == 1 else 0
                 res_diff = self.flux(Tr, P, F, Tc)  # simulation of insulator
             else:
                 r_v_ins_v_react = 0
                 res_diff = {'mflux': 0, 'hflux': 0, "Tvar": 0}
             cooler = U * (Tc - Tr) * np.pi * self.Dt / res_react['tc']
-
+            # print(res_diff)
             dF_dz = res_react['mflux'] * dl2dw * (1 - r_v_ins_v_react) * self.nrt + res_diff["mflux"] * self.nit
             dTr_dz = res_react["Tvar"] * dl2dw * (1 - r_v_ins_v_react) * self.nrt + res_diff["Tvar"] * self.nit + cooler
             dTc_dz = -(res_diff['hflux'] * self.nit - cooler * res_react['tc']) / self.qm_w / 76 \
                 if y[-1] > (latent_heat * self.qm_w) else 0  # 0.8
             dq_rea_dz = res_react["hflux"] * dl2dw * (1 - r_v_ins_v_react) * self.nrt
             dq_dif_dz = res_diff['hflux'] * self.nit + cooler * res_react['tc']
+            # print(dTc_dz)
+            # print(Tc)
             return np.append(dF_dz, np.array([dTr_dz, dTc_dz, dq_rea_dz, dq_dif_dz]))
 
         z_span = [0, L]
         ic = np.append(F_in, np.array([T_in, self.Tc, 0, 0]))
-        res_sim = scipy.integrate.solve_ivp(model, z_span, ic, method='BDF', t_eval=np.linspace(0, L, 1000))
+        res_sim = scipy.integrate.solve_ivp(model, z_span, ic, method='LSODA', t_eval=np.linspace(0, L, 1000))
         res = np.vstack((np.linspace(0, L, 1000), res_sim.y))
         return res
 
@@ -150,29 +152,32 @@ class Simulation(Insulation):
         res_profile[0] = np.hstack((np.linspace(0, L1, 1000), np.linspace(0, L2, 1000) + L1))
         return res_profile
 
-    def recycler(self, ratio=0.99, series=0, status=None, loop='direct'):
+    def recycler(self, ratio=0.99, series=0, status=None, loop='direct', rtol = 0.05):
         """
         solve the recycle loop using Wegstein convergence method
         :param loop: direct loop means the recycled gas is mixed with fresh feed directly
         :param series: 0 means single reactor, 1 means dual reactors in series
         :param ratio: ratio of reacted gas used to recycle
         :param status: status of insulator, 1 or 0
+        :param rtol: relative tolerance of recycler calculation
         :return:
         """
         # read the fresh feed and guess a recycle feed
         status = self.status if status is None else status
         F_fresh, T_fresh = self.F0, self.T0
         F_re0, T_re0 = np.zeros_like(self.F0), self.T0
-        F_re0[:2] = self.F0[:2] * 2
-        F_re0[2:4] = 0.4 * self.F0[0] * (1 - 0.9) if status == 1 else 0  # 0
-        F_re0[4] = self.F0[0] * 2 * 0.3 if status == 1 else self.F0[0] * 2 * 0.01
+        F_re0[:2] = self.F0[:2] * 1.5
+        F_re0[2] = 0.5 * self.F0[0] * (1 - 0.6) if status == 1 else 0
+        F_re0[3] = 0.5 * self.F0[0] * (1 - 0.9) if status == 1 else 0  # 0
+        F_re0[4] = self.F0[0] * 2 * 0.15 if status == 1 else self.F0[0] * 2 * 0.01
         print(F_fresh, T_fresh)
         # update the recycle stream using Wegstein method
         # ref: Abrol, et. al, Computers & Chemical Engineering, 2012
         F_diff = 1e5
-        while F_diff > 0.01:
+        while F_diff > rtol:
             print(F_re0, T_re0)
             F_in0, T_in0 = self.mixer(F_fresh, T_fresh, F_re0, T_re0, self.P0, self.comp_list)
+            print(F_in0, T_in0)
             res0 = self.one_pass(status=status, F_in=F_in0, T_in=T_in0) if series == 0 else \
                 self.dual_reactor(F_in0, T_in0, L1=1, L2=3)
             F_re_cal0 = res0[:, -1][1:6] * ratio
@@ -199,11 +204,11 @@ class Simulation(Insulation):
             w_F = (F_re_cal1 - F_re_cal0) / (F_re1 - F_re0)
             w_F[np.isnan(w_F)] = 0
             q_F = w_F / (w_F - 1)
-            q_F[q_F > 0], q_F[q_F < -5] = -0.5, -5
+            q_F[q_F > 0], q_F[q_F < -5] = 0, -5
 
             # if loop == 'direct':
 
-            if loop == 'indirect' and T_re0 < self.T0:
+            if loop == 'indirect':
                 T_re0 = self.T0
             else:
                 w_T = (T_re_cal1 - T_re_cal0) / (T_re1 - T_re0) if status == 1 else 0
@@ -211,6 +216,7 @@ class Simulation(Insulation):
                 q_T = -0.5 if q_T > 0 else q_T
                 q_T = -5 if q_T < -5 else q_T
                 T_re0 = q_T * T_re1 + (1 - q_T) * T_re_cal1
+            # print(q_F,F_re1, F_re_cal1)
             F_re0 = q_F * F_re1 + (1 - q_F) * F_re_cal1
             F_re0[F_re0 < 0] = 0
 
@@ -220,19 +226,22 @@ class Simulation(Insulation):
 
         return res1, F_re_cal1
 
-    def sim(self, series=0, save_profile=0, loop='direct'):
+    def sim(self, series=0, save_profile=0, loop='direct', rtol = 0.05):
 
         feed_cond = pd.Series(self.feed_para)
         reactor_cond = pd.Series(self.react_para)
         insulator_cond = pd.Series(self.insulator_para)
+        feed_cond["H2"] = self.H2
+        feed_cond["Sv"] = self.sv
+        loop = "direct" if self.recycle == 0 else loop
 
         if self.recycle == 1:
-            res_profile, F_recycle = self.recycler(series=series, loop=loop)
+            res_profile, F_recycle = self.recycler(series=series, loop=loop, rtol=rtol)
             ratio = np.sum(F_recycle) / self.Ft0
             p_metric = pd.Series(ratio, index=['ratio'])
             r_metric = self.reactor_metric(res_profile)
             metric = pd.concat([p_metric, r_metric])
-            res_path = 'result/sim_recycle_%s_log.xlsx' % self.kn_model
+            res_path = 'result/sim_recycle_%s_%.2f_log.xlsx' % (self.kn_model, rtol)
         else:
             res_profile = self.one_pass() if series == 0 else self.dual_reactor(self.F0, self.T0, L1=1, L2=4)
             r_metric = self.reactor_metric(res_profile)
@@ -255,9 +264,9 @@ class Simulation(Insulation):
                     res_save.to_excel(writer, index=False, header=True, sheet_name=loop)
         except FileNotFoundError:
             res_save.to_excel(res_path, index=False, header=True, sheet_name=loop)
-        if save_profile == 1:
+        if save_profile == 1 and r_metric["conversion"] > 0.3:
             save_data = pd.DataFrame(res_profile.T, columns=['z'] + self.comp_list + ['Tr', 'Tc', 'q_react', 'q_diff'])
-            sim_path = 'result/sim_profile_%s_%s_%s_%s_%s_%s_%s_%s_%s.xlsx' \
+            sim_path = 'result/sim_profile_%s_%s_%s_%s_%s_%s_%s_%s_%.2f.xlsx' \
                        % (self.kn_model, self.status, self.recycle, self.Dt, self.L,
                           self.T0, self.P0, self.Tc, self.sv)
             sheet_name = 'U_%s_qm_%s_qv_%s' % (self.Uc, self.qm_w, self.q_v)

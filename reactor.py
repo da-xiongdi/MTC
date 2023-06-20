@@ -40,18 +40,30 @@ class Reaction:
         if self.feed_para["fresh"] == 1:  # the feed to the plant is fresh stream
             self.F0 = np.zeros(len(self.comp_list))  # component of feed gas, mol/s; ndarray
             # volumetric flux per tube from space velocity
-            self.sv = self.feed_para["Sv"]
-            self.v0 = self.sv * self.L * np.pi * self.Dt ** 2 / 4 / 3600 / self.nrt  # volumetric flux per tube, m3/s
-            self.Ft0 = self.P0 * 1e5 * self.v0 / R / self.T0  # total flux of feed,mol/s
-
-            self.F0[0] = 1 / (1 + 1 * self.feed_para["H2/CO2"] + self.feed_para['CO/CO2']) * self.Ft0
-            self.F0[4] = self.F0[0] * self.feed_para['CO/CO2']
-            self.F0[1] = self.Ft0 - self.F0[0] - self.F0[4]
+            if self.feed_para["H2"] == 0:
+                self.sv = self.feed_para["Sv"]
+                # volumetric flux per tube under input temperature and pressure, m3/s
+                self.v0 = self.sv * self.L * np.pi * self.Dt ** 2 / 4 / 3600 / self.nrt
+                self.Ft0 = self.P0 * 1e5 * self.v0 / R / self.T0  # total flux of feed,mol/s
+                self.F0[0] = 1 / (1 + 1 * self.feed_para["H2/CO2"] + self.feed_para['CO/CO2']) * self.Ft0
+                self.F0[4] = self.F0[0] * self.feed_para['CO/CO2']
+                self.F0[1] = self.Ft0 - self.F0[0] - self.F0[4]
+                self.H2 = self.F0[1] * 8.314 * 273.15 / 1e5 * 3600  # Nm3/h
+            else:
+                self.H2 = self.feed_para["H2"]
+                self.F0[1] = self.H2 / 3600 * 1e5 / R / 273.15  # mol/s
+                self.F0[0] = self.F0[1] / self.feed_para["H2/CO2"]
+                self.F0[4] = self.F0[0] * self.feed_para['CO/CO2']
+                self.Ft0 = np.sum(self.F0)
+                self.v0 = self.Ft0 * R * self.T0 / (self.P0 * 1e5)
+                self.sv = self.v0 * self.nrt * 3600 * 4 / self.L / np.pi / self.Dt ** 2
+            # print(self.sv, self.H2)
         else:  # recycled stream
             self.F0 = self.feed_para[self.comp_list].to_numpy()
             self.Ft0 = np.sum(self.F0)
             self.v0 = self.Ft0 * R * self.T0 / (self.P0 * 1e5)
             self.sv = self.v0 * self.nrt * 3600 * 4 / self.L / np.pi / self.Dt ** 2
+            self.H2 = self.F0[1] * R * 273.15/1E5
 
     @staticmethod
     def react_H(T, in_dict):
@@ -323,6 +335,7 @@ class Reaction:
         heat_capacity = 0
         for i in range(5):
             # read the heat capacity for each component, J/(mol K)
+            # print(T, Pi)
             cp = PropsSI('CPMOLAR', 'T', T, 'P', Pi[i] * 1e5, self.comp_list[i]) if Pi[i] > 0 else 0
             heat_capacity += cp * F_dict[i]
         dT = dH * 1e3 / heat_capacity  # K/kg_cat
