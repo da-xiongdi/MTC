@@ -219,7 +219,7 @@ class Simulation(Insulation):
             # print(q_F,F_re1, F_re_cal1)
             F_re0 = q_F * F_re1 + (1 - q_F) * F_re_cal1
             F_re0[F_re0 < 0] = 0
-
+            # test
             # F_in_temp, T_in_temp = self.mixer(F_fresh, T_fresh, F_re0, T_re0, self.P0, self.comp_list)
             # r_CO_CO2 = F_re0[4] / (F_re0[0] + F_fresh[0])
             # F_re0[4] = (F_re0[0] + F_fresh[0]) * 0.1 if r_CO_CO2 < 0.1 else F_re0[4]
