@@ -39,7 +39,7 @@ class Simulation(Insulation):
         for i in range(2):
             for j in range(num):
                 H_in[i, j] = PropsSI('HMOLAR', 'T', T_in[i], 'P', Pi_in[i, j], species[j]) if Pi_in[i, j] != 0 else 0
-        H_t = np.sum(H_in * F_in)  # J
+        H_t = np.sum(H_in * F_in)  # J/s
 
         F_out = F1 + F2
         Pi_out = P * F_out / np.sum(F_out) * 1e5
@@ -91,6 +91,32 @@ class Simulation(Insulation):
                         index=['conversion', 'select', 'y_CH3OH', 'To_r', "Tin_c",
                                'q_react', 'q_diff', 'sp_CH3OH', 'sp_H2O', 'N_CH3OH_H2O'])
         return res
+
+    def recycle_metric(self, sim_profile, F_recycle):
+        # [L, F_CO2, F_H2, F_CH3OH, F_H2O, F_CO, Tr, Tc, q_react, q_diff]
+
+        # calculate metric for recycled reactor, recycled ratio and enthalpy
+        ratio = np.sum(F_recycle) / self.Ft0
+        Pi_feed = pd.Series(self.F0 / self.Ft0 * self.P0, index=self.comp_list)
+        Pi_gas_out = pd.Series(sim_profile[1:6, -1] / np.sum(sim_profile[1:6, -1]) * self.P0, index=self.comp_list)
+        num_comp = len(self.comp_list)
+        Tr_out = sim_profile[6, -1]
+        H_out,H_recycled, H_in, H_feed = 0, 0, 0, 0
+        for i in range(num_comp):
+            H_out += PropsSI('HMOLAR', 'T', Tr_out, 'P', Pi_gas_out[i], self.comp_list[i]) if Pi_gas_out[i] != 0 else 0
+            H_feed += PropsSI('HMOLAR', 'T', 393, 'P', Pi_feed[i], self.comp_list[i]) if Pi_feed[i] != 0 else 0
+            H_in += PropsSI('HMOLAR', 'T', self.T0, 'P', Pi_feed[i], self.comp_list[i]) if Pi_feed[i] != 0 else 0
+            H_recycled += PropsSI('HMOLAR', 'T', self.T0, 'P', Pi_gas_out[i], self.comp_list[i]) if Pi_gas_out[i] != 0 else 0
+        H_out = np.sum(H_out * sim_profile[1:6, -1])  # W
+        H_recycled = np.sum(H_recycled * sim_profile[1:6, -1])
+        H_in = np.sum(H_in * self.F0)  # W
+        H_feed = np.sum(H_feed * self.F0)
+        heat_duty = H_in - H_feed
+        heat_recycle = H_recycled - H_out
+        delta_H = heat_recycle + heat_duty
+
+        p_metric = pd.Series([ratio, heat_recycle, heat_duty, delta_H], index=['ratio','heat_recycle', 'duty','delta_H'])
+        return p_metric
 
     def one_pass(self, status=None, L=None, F_in=None, T_in=None, U=0):
         """
@@ -152,7 +178,7 @@ class Simulation(Insulation):
         res_profile[0] = np.hstack((np.linspace(0, L1, 1000), np.linspace(0, L2, 1000) + L1))
         return res_profile
 
-    def recycler(self, ratio=0.99, series=0, status=None, loop='direct', rtol = 0.05):
+    def recycler(self, ratio=0.99, series=0, status=None, loop='direct', rtol=0.05):
         """
         solve the recycle loop using Wegstein convergence method
         :param loop: direct loop means the recycled gas is mixed with fresh feed directly
@@ -206,8 +232,6 @@ class Simulation(Insulation):
             q_F = w_F / (w_F - 1)
             q_F[q_F > 0], q_F[q_F < -5] = 0, -5
 
-            # if loop == 'direct':
-
             if loop == 'indirect':
                 T_re0 = self.T0
             else:
@@ -219,14 +243,14 @@ class Simulation(Insulation):
             # print(q_F,F_re1, F_re_cal1)
             F_re0 = q_F * F_re1 + (1 - q_F) * F_re_cal1
             F_re0[F_re0 < 0] = 0
-            # test
+
             # F_in_temp, T_in_temp = self.mixer(F_fresh, T_fresh, F_re0, T_re0, self.P0, self.comp_list)
             # r_CO_CO2 = F_re0[4] / (F_re0[0] + F_fresh[0])
             # F_re0[4] = (F_re0[0] + F_fresh[0]) * 0.1 if r_CO_CO2 < 0.1 else F_re0[4]
 
         return res1, F_re_cal1
 
-    def sim(self, series=0, save_profile=0, loop='direct', rtol = 0.05):
+    def sim(self, series=0, save_profile=0, loop='direct', rtol=0.05):
 
         feed_cond = pd.Series(self.feed_para)
         reactor_cond = pd.Series(self.react_para)
@@ -237,11 +261,12 @@ class Simulation(Insulation):
 
         if self.recycle == 1:
             res_profile, F_recycle = self.recycler(series=series, loop=loop, rtol=rtol)
-            ratio = np.sum(F_recycle) / self.Ft0
-            p_metric = pd.Series(ratio, index=['ratio'])
             r_metric = self.reactor_metric(res_profile)
+            # calculate metric for recycled reactor
+            p_metric = self.recycle_metric(res_profile, F_recycle)
+
             metric = pd.concat([p_metric, r_metric])
-            res_path = 'result/sim_recycle_%s_%.2f_log.xlsx' % (self.kn_model, rtol)
+            res_path = 'result/sim2_recycle_%s_%.2f_log.xlsx' % (self.kn_model, rtol)
         else:
             res_profile = self.one_pass() if series == 0 else self.dual_reactor(self.F0, self.T0, L1=1, L2=4)
             r_metric = self.reactor_metric(res_profile)
