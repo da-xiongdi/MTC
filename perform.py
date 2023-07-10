@@ -21,7 +21,7 @@ for i in range(feed_data.shape[0]):
 
             sim = Simulation(reactor_data.iloc[j], chem_data, feed_data.iloc[i],
                              insulator_data.iloc[k])
-            sim.sim(series=0, save_profile=1, loop='indirect', rtol=0.01)
+            sim.sim(series=1, save_profile=1, loop='indirect', rtol=0.01)
             n += 1
 
 b = time.time()

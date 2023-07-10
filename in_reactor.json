@@ -1,11 +1,11 @@
 {
   "reactor": {
-    "L": 1.25,
-    "Dt":[0.03],
+    "L": 2,
+    "Dt":[0.07],
     "nrt": 1,
     "rhoc": 1950,
     "phi": 0.67,
-    "recycle": "on",
+    "recycle": "off",
     "Uc": 0
   },
   "unit": {

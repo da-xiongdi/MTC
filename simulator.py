@@ -2,7 +2,7 @@ import os.path
 
 import scipy
 
-from insulator import Insulation
+from insulator import Insulation, ks
 import numpy as np
 import pandas as pd
 from CoolProp.CoolProp import PropsSI
@@ -78,44 +78,52 @@ class Simulation(Insulation):
         dH_react = sim_res[-2, -1]
 
         # in-situ separation metric
+        v_react = (self.Dt ** 2 - self.Do ** 2) if self.location == 1 else self.Dt ** 2
+        v_react = v_react / 4 * np.pi * self.L  # catalyst volume
+        area_cond = self.Do * np.pi * self.L if self.location == 1 else self.Dt * np.pi * self.L  # condenser area
+        ratio_v_area = v_react / area_cond
         Tin_c = sim_res[7, -1]  # input water temperature in the cold side of insulator
-        dF_diff_ch3oh = dF_react_ch3oh - sim_res[3, -1]  # amount of CH3OH condensed
-        dF_diff_h2o = dF_react_h2o - sim_res[4][-1]  # amount of H2O condensed
+        dF_diff_ch3oh = dF_react_ch3oh - (sim_res[3, -1] - sim_res[3, 0])  # amount of CH3OH condensed
+        dF_diff_h2o = dF_react_h2o - (sim_res[4][-1] - sim_res[4][0])  # amount of H2O condensed
         sp_ch3oh = dF_diff_ch3oh / dF_react_ch3oh  # separation ratio of CH3OH
         sp_h2o = dF_diff_h2o / dF_react_h2o  # separation ratio of H2O
         N_CH3OH_H2O = dF_diff_ch3oh / dF_diff_h2o
         dH_diff = sim_res[-1, -1]
 
         yield_CH3OH = dF_react_ch3oh if self.status == 0 else dF_diff_ch3oh
-        res = pd.Series([r, s_react, yield_CH3OH, To_r, Tin_c, dH_react, dH_diff, sp_ch3oh, sp_h2o, N_CH3OH_H2O],
-                        index=['conversion', 'select', 'y_CH3OH', 'To_r', "Tin_c",
+        res = pd.Series([ratio_v_area, r, s_react, yield_CH3OH, To_r,
+                         Tin_c, dH_react, dH_diff, sp_ch3oh, sp_h2o, N_CH3OH_H2O],
+                        index=["V/A", 'conversion', 'select', 'y_CH3OH', 'To_r', "Tin_c",
                                'q_react', 'q_diff', 'sp_CH3OH', 'sp_H2O', 'N_CH3OH_H2O'])
         return res
 
     def recycle_metric(self, sim_profile, F_recycle):
         # [L, F_CO2, F_H2, F_CH3OH, F_H2O, F_CO, Tr, Tc, q_react, q_diff]
-
+        T_feed = 150 + 273
         # calculate metric for recycled reactor, recycled ratio and enthalpy
         ratio = np.sum(F_recycle) / self.Ft0
         Pi_feed = pd.Series(self.F0 / self.Ft0 * self.P0, index=self.comp_list)
         Pi_gas_out = pd.Series(sim_profile[1:6, -1] / np.sum(sim_profile[1:6, -1]) * self.P0, index=self.comp_list)
         num_comp = len(self.comp_list)
         Tr_out = sim_profile[6, -1]
-        H_out,H_recycled, H_in, H_feed = 0, 0, 0, 0
+        H_out, H_recycled, H_in, H_feed = np.zeros((4, num_comp))
         for i in range(num_comp):
-            H_out += PropsSI('HMOLAR', 'T', Tr_out, 'P', Pi_gas_out[i], self.comp_list[i]) if Pi_gas_out[i] != 0 else 0
-            H_feed += PropsSI('HMOLAR', 'T', 393, 'P', Pi_feed[i], self.comp_list[i]) if Pi_feed[i] != 0 else 0
-            H_in += PropsSI('HMOLAR', 'T', self.T0, 'P', Pi_feed[i], self.comp_list[i]) if Pi_feed[i] != 0 else 0
-            H_recycled += PropsSI('HMOLAR', 'T', self.T0, 'P', Pi_gas_out[i], self.comp_list[i]) if Pi_gas_out[i] != 0 else 0
-        H_out = np.sum(H_out * sim_profile[1:6, -1])  # W
-        H_recycled = np.sum(H_recycled * sim_profile[1:6, -1])
-        H_in = np.sum(H_in * self.F0)  # W
-        H_feed = np.sum(H_feed * self.F0)
-        heat_duty = H_in - H_feed
-        heat_recycle = H_recycled - H_out
+            H_out[i] = PropsSI('HMOLAR', 'T', Tr_out, 'P', Pi_gas_out[i], self.comp_list[i]) \
+                if Pi_gas_out[i] != 0 else 0
+            H_feed[i] = PropsSI('HMOLAR', 'T', T_feed, 'P', Pi_feed[i], self.comp_list[i]) if Pi_feed[i] != 0 else 0
+            H_in[i] = PropsSI('HMOLAR', 'T', self.T0, 'P', Pi_feed[i], self.comp_list[i]) if Pi_feed[i] != 0 else 0
+            H_recycled[i] = PropsSI('HMOLAR', 'T', self.T0, 'P', Pi_gas_out[i], self.comp_list[i]) \
+                if Pi_gas_out[i] != 0 else 0
+        H_out_t = np.sum(H_out * sim_profile[1:6, -1])  # W
+        H_recycled_t = np.sum(H_recycled * sim_profile[1:6, -1])
+        H_in_t = np.sum(H_in * self.F0)  # W
+        H_feed_t = np.sum(H_feed * self.F0)
+        heat_duty = H_in_t - H_feed_t
+        heat_recycle = H_recycled_t - H_out_t
         delta_H = heat_recycle + heat_duty
 
-        p_metric = pd.Series([ratio, heat_recycle, heat_duty, delta_H], index=['ratio','heat_recycle', 'duty','delta_H'])
+        p_metric = pd.Series([ratio, heat_recycle, heat_duty, delta_H],
+                             index=['ratio', 'heat_recycle', 'duty', 'delta_H'])
         return p_metric
 
     def one_pass(self, status=None, L=None, F_in=None, T_in=None, U=0):
@@ -148,16 +156,18 @@ class Simulation(Insulation):
                 # the module insulator is on
                 # volume fraction of catalyst
                 r_v_ins_v_react = self.Do ** 2 * self.nit / self.Dt ** 2 / self.nrt if self.location == 1 else 0
+                coe_Tc = -1 if self.location == 1 else 1
                 res_diff = self.flux(Tr, P, F, Tc)  # simulation of insulator
             else:
                 r_v_ins_v_react = 0
+                coe_Tc = 0
                 res_diff = {'mflux': 0, 'hflux': 0, "Tvar": 0}
             cooler = U * (Tc - Tr) * np.pi * self.Dt / res_react['tc']
             # print(res_diff)
             dF_dz = res_react['mflux'] * dl2dw * (1 - r_v_ins_v_react) * self.nrt + res_diff["mflux"] * self.nit
             dTr_dz = res_react["Tvar"] * dl2dw * (1 - r_v_ins_v_react) * self.nrt + res_diff["Tvar"] * self.nit + cooler
-            dTc_dz = -(res_diff['hflux'] * self.nit - cooler * res_react['tc']) / self.qm_w / 76 \
-                if y[-1] > (latent_heat * self.qm_w) else 0  # 0.8
+            dTc_dz = -(coe_Tc * res_diff['hflux'] * self.nit - cooler * res_react['tc']) / self.qm_w / 76 \
+                if abs(y[-1]) > (latent_heat * self.qm_w) else 0  # 0.8
             dq_rea_dz = res_react["hflux"] * dl2dw * (1 - r_v_ins_v_react) * self.nrt
             dq_dif_dz = res_diff['hflux'] * self.nit + cooler * res_react['tc']
             # print(dTc_dz)
@@ -263,15 +273,17 @@ class Simulation(Insulation):
             res_profile, F_recycle = self.recycler(series=series, loop=loop, rtol=rtol)
             r_metric = self.reactor_metric(res_profile)
             # calculate metric for recycled reactor
+            p_conversion = pd.Series(r_metric["y_CH3OH"] / self.F0[0], index=["p_conversion"])
             p_metric = self.recycle_metric(res_profile, F_recycle)
+            p_metric = p_metric.append(p_conversion)
 
             metric = pd.concat([p_metric, r_metric])
-            res_path = 'result/sim2_recycle_%s_%.2f_log.xlsx' % (self.kn_model, rtol)
+            res_path = 'result/sim_recycle_%s_%s_%.2f_log.xlsx' % (ks, self.kn_model, rtol)
         else:
-            res_profile = self.one_pass() if series == 0 else self.dual_reactor(self.F0, self.T0, L1=1, L2=4)
+            res_profile = self.one_pass() if series == 0 else self.dual_reactor(self.F0, self.T0, L1=0.1, L2=1)
             r_metric = self.reactor_metric(res_profile)
             metric = r_metric
-            res_path = 'result/sim_one_pass_%s_log.xlsx' % self.kn_model
+            res_path = 'result/sim_one_pass_%s_%s_log.xlsx' % (ks, self.kn_model)
 
         print(r_metric)
         # concat the input para with the performance metrics
@@ -289,10 +301,10 @@ class Simulation(Insulation):
                     res_save.to_excel(writer, index=False, header=True, sheet_name=loop)
         except FileNotFoundError:
             res_save.to_excel(res_path, index=False, header=True, sheet_name=loop)
-        if save_profile == 1 and r_metric["conversion"] > 0.3:
+        if save_profile == 1 and r_metric["conversion"] > 0.23:
             save_data = pd.DataFrame(res_profile.T, columns=['z'] + self.comp_list + ['Tr', 'Tc', 'q_react', 'q_diff'])
-            sim_path = 'result/sim_profile_%s_%s_%s_%s_%s_%s_%s_%s_%.2f.xlsx' \
-                       % (self.kn_model, self.status, self.recycle, self.Dt, self.L,
+            sim_path = 'result/sim_profile_%s_%s_%s_%s_%s_%s_%s_%s_%s_%.2f.xlsx' \
+                       % (ks, self.kn_model, self.status, self.recycle, self.Dt, self.L,
                           self.T0, self.P0, self.Tc, self.sv)
             sheet_name = 'U_%s_qm_%s_qv_%s' % (self.Uc, self.qm_w, self.q_v)
             try:

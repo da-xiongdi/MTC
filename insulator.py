@@ -18,9 +18,13 @@ class Insulation(Reaction):
         self.insulator_para = insulator_para
         self.nit = self.insulator_para["nit"]  # tube number of the insulator
         self.location = self.insulator_para["io"]
-        self.Din = self.Dt  # self.insulator_para['Din']
-        # print(self.Din)
-        self.Do = self.Din + self.insulator_para['Thick'] * 2
+        if self.location == 0:
+            self.Din = self.Dt  # self.insulator_para['Din']
+            self.Do = self.Din + self.insulator_para['Thick'] * 2
+        else:
+            self.Din = self.insulator_para['Din']
+            self.Do = self.Din + self.insulator_para['Thick'] * 2
+            self.sv = self.sv * self.Dt ** 2 / (self.Dt ** 2 - self.Do ** 2)
 
     @staticmethod
     def ode_single(inner_cond, outer_cond, P, properties):
@@ -127,6 +131,7 @@ class Insulation(Reaction):
         """
         # calculate the correction to volumetric flow rate (m3/s)
         # calculate the partial pressure
+        # print(F_dict)
         Ft = np.sum(F_dict)
         v = self.v0 * (self.P0 / P) * (Th / self.T0) * (Ft / self.Ft0)
         Pi = F_dict * R * Th / v * 1e-5  # bar
@@ -153,7 +158,7 @@ class Insulation(Reaction):
         # P_dew = vle.dew_p([2, 3])['P'] / (xi_h["Methanol"] + xi_h['H2O']) * 1.1  # vle.dew_p_all['P']
         P_sat_CH3OH = PropsSI('P', 'T', Tc, 'Q', 1, "Methanol")
         P_sat_H2O = PropsSI('P', 'T', Tc, 'Q', 1, "H2O")
-        P_dew = (1/(xi_h["Methanol"]/P_sat_CH3OH+xi_h['H2O']/P_sat_H2O))*1e-5
+        P_dew = (1 / (xi_h["Methanol"] / P_sat_CH3OH + xi_h['H2O'] / P_sat_H2O)) * 1e-5
         # print(P_dew)
         # P_dew_temp = vle.dew_p_all
         # P_dew = vle.dew_p([2, 3])['P'] / (xi_h["Methanol"] + xi_h['H2O']) if P_dew_temp is None else P_dew_temp['P']
@@ -197,6 +202,7 @@ class Insulation(Reaction):
                 property_c = self.mixture_property(Tc, Pi_c)
                 property_w = self.mixture_property(Tw, Pi_h)
                 mix_pro_ave = (property_w + property_c) / 2
+
                 k_e = mix_pro_ave["k"] * vof + ks * (1 - vof)  # effective heat conductivity of the insulator
 
                 # calculate the diffusional flux inside the insulator
@@ -219,6 +225,12 @@ class Insulation(Reaction):
                 Tw -= 1
                 # print(Th, Tw, qcv_cond, qcv_conv)
             gap_min = ode_res[1][-1] - cond_list[self.location - 1][2]
+            # [xc, xd, Nc, Nd, T, dTdz]
+            # xsol = np.linspace(0.02, 0.03, 200)
+            # plt.plot(xsol, ode_res[1])
+            # plt.show()
+            # plt.plot(xsol, ode_res[3])
+            # plt.show()
 
             property_h = self.mixture_property(Th, Pi_h)
             dT = qcv_cond / Ft / property_h["cp_m"]  # k/m
