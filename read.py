@@ -60,6 +60,7 @@ class ReadData:
 
             # feed para frame
             T0_array = self.data_array(feed["T"])
+            T_feed_array = self.data_array(feed["T_feed"])
             P0_array = self.data_array(feed["P"])
             sv_array = self.data_array(feed["Sv"])
             H2_array = self.data_array(feed['H2'])
@@ -72,15 +73,17 @@ class ReadData:
                     for sv in sv_array:
                         for CO_CO2 in CO_CO2_array:
                             for H2 in H2_array:
-                                feed_para.iloc[i] = np.array([T, P, recycle, H2_CO2, CO_CO2, H2, sv])
-                                i += 1
+                                for T_feed in T_feed_array:
+                                    feed_para.iloc[i] = np.array([T, T_feed, P, recycle, H2_CO2, CO_CO2, H2, sv])
+                                    i += 1
         else:
             feed = np.array([float(i) for i in self.feed_para["feed"].split('\t')])
             T = self.feed_para["condition"]['T'][0]
+            T_feed = self.feed_para["condition"]['T_feed'][0]
             P = self.feed_para["condition"]['P'][0]
-            feed = np.append(np.array([T, P, 0]), feed)
+            feed = np.append(np.array([T, T_feed,P, 0]), feed)
             feed_para = pd.DataFrame(feed.reshape(1, len(feed)),
-                                     columns=['T', 'P', 'fresh', "CO2", "H2", "Methanol", "H2O", "CO"])
+                                     columns=['T', 'T_feed', 'P', 'fresh', "CO2", "H2", "Methanol", "H2O", "CO"])
         return feed_para
 
     @property
@@ -110,10 +113,12 @@ class ReadData:
 
     @property
     def reactor_data(self):
-        L = self.react_para['L']  # length, m
+        L1 = self.react_para['L1']  # length, m
         nrt = self.react_para['nrt']  # number of the reaction tube
         phi = self.react_para["phi"]  # void of fraction
         rhoc = self.react_para["rhoc"]  # density of catalyst, kg/m3
+        stage = self.react_para['stage']
+        L2 = self.react_para['L2']  # length, m
         Uc = self.react_para["Uc"]  # total heat transfer coefficient of the reactor, W/m2 K
         recycle = 1 if self.react_para['recycle'] == "on" else 0
 
@@ -123,7 +128,7 @@ class ReadData:
         react_para = pd.DataFrame(index=np.arange(reactor_num), columns=list(self.react_para.keys()))
         i = 0
         for Dt in Dt_array:
-            react_para.iloc[i] = [L, Dt, nrt, rhoc, phi, recycle, Uc]
+            react_para.iloc[i] = [L1, Dt, nrt, rhoc, phi, recycle, stage, L2, Uc]
             i += 1
         return react_para
 

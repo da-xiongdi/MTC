@@ -3,7 +3,7 @@ from CoolProp.CoolProp import PropsSI
 import pandas as pd
 
 R = 8.314  # J/mol/K
-ks, vof = 1.5, 0.8
+ks, vof = 1, 0.8 # 1.5 for 0.42 1 for 0.3 0.2 for 0.15
 
 
 class Reaction:
@@ -16,7 +16,9 @@ class Reaction:
 
         # reactor parameters
         self.react_para = reactor_para
-        self.L, self.Dt = self.react_para['L'], self.react_para['Dt']  # length, m
+        self.L1, self.Dt = self.react_para['L1'], self.react_para['Dt']  # length, m
+        self.stage = self.react_para["stage"]
+        self.L2 = self.react_para["L2"]
         self.nrt = self.react_para['nrt']  # number of the reaction tube
         self.phi = self.react_para["phi"]  # void of fraction
         self.rhoc = self.react_para["rhoc"]  # density of catalyst, kg/m3
@@ -36,6 +38,7 @@ class Reaction:
         # feed gas parameter
         self.feed_para = feed_para
         self.P0, self.T0 = self.feed_para["P"], self.feed_para["T"]  # P0 bar, T0 K
+        self.T_feed = self.feed_para["T_feed"]
 
         if self.feed_para["fresh"] == 1:  # the feed to the plant is fresh stream
             self.F0 = np.zeros(len(self.comp_list))  # component of feed gas, mol/s; ndarray
@@ -43,7 +46,7 @@ class Reaction:
             if self.feed_para["H2"] == 0:
                 self.sv = self.feed_para["Sv"]
                 # volumetric flux per tube under input temperature and pressure, m3/s
-                self.v0 = self.sv * self.L * np.pi * self.Dt ** 2 / 4 / 3600 / self.nrt
+                self.v0 = self.sv * self.L1 * np.pi * self.Dt ** 2 / 4 / 3600 / self.nrt
                 self.Ft0 = self.P0 * 1e5 * self.v0 / R / self.T0  # total flux of feed,mol/s
                 self.F0[0] = 1 / (1 + 1 * self.feed_para["H2/CO2"] + self.feed_para['CO/CO2']) * self.Ft0
                 self.F0[4] = self.F0[0] * self.feed_para['CO/CO2']
@@ -56,13 +59,13 @@ class Reaction:
                 self.F0[4] = self.F0[0] * self.feed_para['CO/CO2']
                 self.Ft0 = np.sum(self.F0)
                 self.v0 = self.Ft0 * R * self.T0 / (self.P0 * 1e5)
-                self.sv = self.v0 * self.nrt * 3600 * 4 / self.L / np.pi / self.Dt ** 2
+                self.sv = self.v0 * self.nrt * 3600 * 4 / self.L1 / np.pi / self.Dt ** 2
             # print(self.sv, self.H2)
         else:  # recycled stream
             self.F0 = self.feed_para[self.comp_list].to_numpy()
             self.Ft0 = np.sum(self.F0)
             self.v0 = self.Ft0 * R * self.T0 / (self.P0 * 1e5)
-            self.sv = self.v0 * self.nrt * 3600 * 4 / self.L / np.pi / self.Dt ** 2
+            self.sv = self.v0 * self.nrt * 3600 * 4 / self.L1 / np.pi / self.Dt ** 2
             self.H2 = self.F0[1] * R * 273.15/1E5
 
     @staticmethod
@@ -130,7 +133,10 @@ class Reaction:
         Pi_gas = Pi_gas * 1e5  # convert bar to pa
         Ti_sat = pd.Series(np.ones(n) * 100, index=Pi_gas.index)
         if 'Methanol' in Pi_gas.index:
-            Ti_sat['Methanol'] = PropsSI('T', 'P', Pi_gas['Methanol'], 'Q', 1, 'Methanol')
+            try:
+                Ti_sat['Methanol'] = PropsSI('T', 'P', Pi_gas['Methanol'], 'Q', 1, 'Methanol')
+            except ValueError:
+                Ti_sat['Methanol'] = 300
         if "H2O" in Pi_gas.index:
             try:
                 Ti_sat['H2O'] = PropsSI('T', 'P', Pi_gas['H2O'], 'Q', 1, 'H2O')
@@ -155,7 +161,15 @@ class Reaction:
                     k[i] = PropsSI('L', 'T', T, 'Q', 1, gas)
                     vis[i] = PropsSI('V', 'T', T, 'Q', 1, gas)
                     rho[i] = PropsSI('D', 'T', T, 'Q', 1, gas)
-
+            else:
+                # thermal conductivity, W/(m K)
+                k[i] = 0
+                # viscosity, Pa S
+                vis[i] = 1e-10
+                # heat capacity, J/(mol K)
+                cp[i] = 0
+                # density, kg/m3
+                rho[i] = 0
             # molar weight, g/mol
             M[i] = PropsSI('MOLARMASS', 'T', T, 'P', 1e5, gas)
             i += 1

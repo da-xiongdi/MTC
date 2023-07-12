@@ -112,7 +112,7 @@ class VLE:
     def dew_p(self, spec, x_guess=None):
         y = self.mix.iloc[spec] / self.mix.iloc[spec].sum()
         num = len(y)
-        comp = pd.DataFrame(index=['V', 'L'], columns=y.index)
+        comp = pd.DataFrame(index=['V', 'L1'], columns=y.index)
         comp.iloc[0] = y.values
 
         # find the equilibrium pressure and mol fraction of liquid phase
@@ -149,7 +149,7 @@ class VLE:
         return res
 
     def flash(self, P):
-        comp = pd.DataFrame(index=['V', 'L'], columns=self.mix.index)
+        comp = pd.DataFrame(index=['V', 'L1'], columns=self.mix.index)
         fi = np.zeros((2, self.num))
         fi[1] = 1
         K = np.exp(5.37 * (1 + self.Omega) * (1 - 1 / (self.T / self.Tc))) / (P / self.Pc)

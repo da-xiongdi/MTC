@@ -1,16 +1,18 @@
 {
   "condition": {
-    "T": [533],
-    "P": [70],
+    "T": [523],
+    "T_feed": [423],
+    "P": [80],
     "fresh": "on",
     "H2/CO2": 3,
-    "CO/CO2": [0],
+    "CO/CO2": [0.1],
     "H2": [2],
     "Sv": [90]
   },
   "feed": "0.01604117\t0.04812351\t0.00032082\t0.00052082\t0.000",
   "unit": {
-    "T": "K",
+    "T": "reactor inlet temperature, K",
+    "T_feed": "feed gas temperature, K",
     "P": "bar",
     "H2/CO2": "mole_ratio",
     "H2": "Nm3/h",

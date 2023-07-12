@@ -27,6 +27,25 @@ class Insulation(Reaction):
             self.sv = self.sv * self.Dt ** 2 / (self.Dt ** 2 - self.Do ** 2)
 
     @staticmethod
+    def bi_diff(T, P):
+        k = 1.38e-23
+        mass = np.array([44, 2, 32, 18, 28])
+        sigma = np.array([3.941, 2.827, 3.626, 2.641, 3.690])
+        epsilon = np.array([195.2, 59.7, 481.8, 809.1, 91.7])
+        sigma_mix, epsilon_mix = np.zeros((5, 5)), np.zeros((5, 5))
+        mass_mix, D_bi = np.zeros((5, 5)), np.zeros((5, 5))
+        for i in range(5):
+            for j in range(5):
+                sigma_mix[i, j] = (sigma[i] + sigma[j]) / 2
+                epsilon_mix[i, j] = (epsilon[i] * epsilon[j]) ** 0.5
+                mass_mix[i, j] = 2 / (1 / mass[i] + 1 / mass[j])
+                T_star = k * T / epsilon_mix[i, j]
+                omega = 1.06036 / T_star ** 0.1561 + 0.193 / np.exp(0.47635 * T_star) \
+                        + 1.03587 / np.exp(1.52996 * T_star) + 1.76474 / np.exp(3.89411 * T_star)
+                D_bi[i, j] = 0.00266 * T ** 1.5 / (P * mass_mix[i, j] ** 0.5 * sigma_mix[i, j] ** 2 * omega)
+        return D_bi
+
+    @staticmethod
     def ode_single(inner_cond, outer_cond, P, properties):
         """
         ode for the concentration distribution along the channel, only one condensate
@@ -66,10 +85,10 @@ class Insulation(Reaction):
         ysol = res.sol(xsol)
         return ysol
 
-    @staticmethod
-    def ode_multi(inner_cond, outer_cond, P, properties):
+    def ode_multi(self, x_in, inner_cond, outer_cond, P, properties):
         """
         ode for the concentration distribution along the channel, two condensates
+        :param x_in: molar fraction at input; pd
         :param inner_cond: temperature, molar fraction, and radius at inside;list
         :param outer_cond: temperature, molar fraction, and radius at outside; list
         :param P: pressure of mixture, bar
@@ -77,13 +96,17 @@ class Insulation(Reaction):
         :return: concentration and its slop
         """
         P = P * 1e5  # convert bar to pa
-        [cp_c, cp_d, D_c, D_d, k] = properties
+        x_main = x_in[["CO2", "H2"]] / np.sum(x_in[["CO2", "H2"]])
+        [cp_c, cp_d, k] = properties
         [T1, x_c1, x_d1, r1] = inner_cond
         [T2, x_c2, x_d2, r2] = outer_cond
-        D_ca, D_cb = 7.53e-6, 1.19e-5  # 9e-6, 1.5e-5  # 2.5e-5, 3e-5
-        D_da, D_db = 1.15e-5, 1.62e-5  # 1.5e-5, 2.1e-5
-        D_cm_id = 1 / (0.25 / D_ca + 0.75 / D_cb)
-        D_dm_id = 1 / (0.25 / D_da + 0.75 / D_db)
+        D_bi = self.bi_diff((T1 + T2) / 2, P / 1e5)
+        D_31, D_32 = D_bi[2, 0], D_bi[2, 1]
+        D_41, D_42 = D_bi[3, 0], D_bi[3, 1]
+        # D_ca, D_cb = 7.53e-6, 1.19e-5  # 9e-6, 1.5e-5  # 2.5e-5, 3e-5
+        # D_da, D_db = 1.15e-5, 1.62e-5  # 1.5e-5, 2.1e-5
+        D_cm_id = 1 / (0.25 / D_31 + 0.75 / D_32)
+        D_dm_id = 1 / (0.25 / D_41 + 0.75 / D_42)
         Nc_i = -(2 * P / R / (T2 + T1)) * D_cm_id * (x_c1 - x_c2) / (r1 - r2)
         Nd_i = -(2 * P / R / (T2 + T1)) * D_dm_id * (x_d1 - x_d2) / (r1 - r2)
         r = Nc_i / Nd_i
@@ -91,10 +114,10 @@ class Insulation(Reaction):
         def model(z, y):
             [xc, xd, Nd, T, dTdz] = y
             Nc = r * Nd
-            D_cm = -(xc * (Nc + Nd) - Nc) / (0.25 * Nc / D_ca + 0.75 * Nc / D_cb)
-            D_dm = -(xd * (Nc + Nd) - Nd) / (0.25 * Nd / D_da + 0.75 * Nd / D_db)
-            dxc_dz = -Nc / D_cm / (P / R / T)
-            dxd_dz = -Nd / D_dm / (P / R / T)
+            D_cm = -(xc * (Nc + Nd) - Nc) / (x_main["CO2"] * Nc / D_31 + x_main["H2"] * Nc / D_32)
+            D_dm = -(xd * (Nc + Nd) - Nd) / (x_main["CO2"] * Nd / D_41 + x_main["H2"] * Nd / D_42)
+            dxc_dz = -(Nc - xc * (Nc + Nd)) / (D_cm * (P / R / T))
+            dxd_dz = -(Nd - xd * (Nc + Nd)) / (D_dm * (P / R / T))
 
             # dNc_dz = -Nc / z
             dNd_dz = -Nd / z
@@ -202,16 +225,15 @@ class Insulation(Reaction):
                 property_c = self.mixture_property(Tc, Pi_c)
                 property_w = self.mixture_property(Tw, Pi_h)
                 mix_pro_ave = (property_w + property_c) / 2
-
                 k_e = mix_pro_ave["k"] * vof + ks * (1 - vof)  # effective heat conductivity of the insulator
 
                 # calculate the diffusional flux inside the insulator
                 cold_cond = [Tc, xi_c["Methanol"], xi_c["H2O"], radium[1 - self.location]]
                 hot_cond = [Th, xi_h["Methanol"], xi_h["H2O"], radium[self.location]]
                 cond_list = [hot_cond, cold_cond]
-                cal_property = [mix_pro_ave["cp_Methanol"], mix_pro_ave["cp_H2O"], 4.5e-5, 1.4e-5, k_e]
+                cal_property = [mix_pro_ave["cp_Methanol"], mix_pro_ave["cp_H2O"], k_e]
                 # [xc, xd, Nc,Nd, T, dTdz]
-                ode_res = self.ode_multi(cond_list[self.location], cond_list[self.location - 1], P, cal_property)
+                ode_res = self.ode_multi(xi_h, cond_list[self.location], cond_list[self.location - 1], P, cal_property)
 
                 # mass flux inside the insulator, mol/(s m)
                 na_H20 = ode_res[3][-self.location] * radium[-self.location] * 2 * np.pi * vof
@@ -239,6 +261,7 @@ class Insulation(Reaction):
 
             dF = np.zeros_like(F_dict)
             dF[2:4] = [na_CH3OH, na_H20]
+            # print(k_e)
             if self.location == 0:
                 dF = -1 * dF
                 dT = -1 * dT
