@@ -309,7 +309,7 @@ class Simulation(Insulation):
                     res_save.to_excel(writer, index=False, header=True, sheet_name=loop)
         except FileNotFoundError:
             res_save.to_excel(res_path, index=False, header=True, sheet_name=loop)
-        if save_profile == 1 and r_metric["conversion"] > 0.15:
+        if save_profile == 1 and r_metric["conversion"] > 0.25:
             save_data = pd.DataFrame(res_profile.T, columns=['z'] + self.comp_list + ['Tr', 'Tc', 'q_react', 'q_diff'])
             sim_path = 'result/sim_profile_%s_%s_%s_%s_%s_%s_%s_%s_%s_%.2f.xlsx' \
                        % (ks, self.kn_model, self.status, self.recycle, self.Dt, self.L1,

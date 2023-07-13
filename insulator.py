@@ -236,6 +236,8 @@ class Insulation(Reaction):
                 ode_res = self.ode_multi(xi_h, cond_list[self.location], cond_list[self.location - 1], P, cal_property)
 
                 # mass flux inside the insulator, mol/(s m)
+                # print(ode_res[3][-self.location] * vof / ((xi_h["Methanol"] - xi_c["Methanol"]) * self.P0 * 1e5))
+                # print(ode_res[2][-self.location] * vof / ((xi_h["H2O"] - xi_c["H2O"]) * self.P0 * 1e5))
                 na_H20 = ode_res[3][-self.location] * radium[-self.location] * 2 * np.pi * vof
                 na_CH3OH = ode_res[2][-self.location] * radium[-self.location] * 2 * np.pi * vof
 
