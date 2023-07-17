@@ -2,12 +2,13 @@
    "insulator": {
     "status": "on",
     "Din": [0.05],
-    "Thick":0.15,
+    "Thick":0.05,
     "nit": 1,
-    "Tc": [323.15],
+    "Tc": [313.15],
     "io": "in",
-    "qm": 0.05,
-     "q": 0
+    "qm": 0.06,
+     "q": 0,
+     "heater": 120
   },
   "unit": {
     "Din": "m",
@@ -16,6 +17,7 @@
     "Tc": "K, output temperature of water in the cold side",
     "io": "in:reaction in the insides of insulator; out:inverse",
     "qm": "mol/s, flux of water in the cold side",
-    "q": "-,vapor fraction of water at outside"
+    "q": "-,vapor fraction of water at outside",
+    "heater": "W/m"
   }
 }

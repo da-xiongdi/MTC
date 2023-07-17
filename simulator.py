@@ -75,7 +75,7 @@ class Simulation(Insulation):
         dF_react_ch3oh = (sim_res[1, 0] - sim_res[1][-1]) - dF_react_rwgs  # amount of reaction CO2 to CH3OH
         dF_react_h2o = dF_react_rwgs + dF_react_ch3oh  # amount of water produced
         s_react = dF_react_ch3oh / (sim_res[1, 0] - sim_res[1, -1])  # selectivity of reactions
-        dH_react = sim_res[-2, -1]
+        dH_react = sim_res[-3, -1]
 
         # in-situ separation metric
         v_react = (self.Dt ** 2 - self.Do ** 2) if self.location == 1 else self.Dt ** 2
@@ -88,13 +88,14 @@ class Simulation(Insulation):
         sp_ch3oh = dF_diff_ch3oh / dF_react_ch3oh  # separation ratio of CH3OH
         sp_h2o = dF_diff_h2o / dF_react_h2o  # separation ratio of H2O
         N_CH3OH_H2O = dF_diff_ch3oh / dF_diff_h2o
-        dH_diff = sim_res[-1, -1]
+        dH_diff = sim_res[-2, -1]
+        dH_heater = sim_res[-1, -1]
 
         yield_CH3OH = dF_react_ch3oh if self.status == 0 else dF_diff_ch3oh
         res = pd.Series([ratio_v_area, r, s_react, yield_CH3OH, To_r,
-                         Tin_c, dH_react, dH_diff, sp_ch3oh, sp_h2o, N_CH3OH_H2O],
+                         Tin_c, dH_react, dH_diff, dH_heater, sp_ch3oh, sp_h2o, N_CH3OH_H2O],
                         index=["V/A", 'conversion', 'select', 'y_CH3OH', 'To_r', "Tin_c",
-                               'q_react', 'q_diff', 'sp_CH3OH', 'sp_H2O', 'N_CH3OH_H2O'])
+                               'q_react', 'q_diff', 'q_heater','sp_CH3OH', 'sp_H2O', 'N_CH3OH_H2O'])
         return res
 
     def recycle_metric(self, sim_profile, F_recycle, T_feed):
@@ -153,7 +154,7 @@ class Simulation(Insulation):
         property_feed = self.mixture_property(self.T_feed, F_feed_pd / np.sum(self.F0) * self.P0)
 
         def model(z, y):
-            # y= [F_CO2, F_H2, F_CH3OH, F_H2O, F_CO, Tr, Tc, q_react, q_diff]
+            # y= [F_CO2, F_H2, F_CH3OH, F_H2O, F_CO, Tr, Tc, q_react, q_diff, q_heater]
             F = np.array(y[:5])
             Tr, Tc = y[5], y[6]
             # simulation of reactor
@@ -167,23 +168,26 @@ class Simulation(Insulation):
                 r_v_ins_v_react = self.Do ** 2 * self.nit / self.Dt ** 2 / self.nrt if self.location == 1 else 0
                 coe_Tc = -1 if self.location == 1 else 1
                 res_diff = self.flux(Tr, P, F, Tc)  # simulation of insulator
-                dTc_dz = (coe_Tc * res_diff['hflux'] * self.nit) / self.qm_w / 76 #\
-                    # if abs(y[-1]) > (latent_heat * self.qm_w) else 0  # 0.8
+                heater = self.heater if z > 1 else 0   # W/m
+                dTc_dz = (coe_Tc * res_diff['hflux'] * self.nit) / self.qm_w / 76  # \
+                # if abs(y[-1]) > (latent_heat * self.qm_w) else 0  # 0.8
             else:
                 r_v_ins_v_react = 0
+                heater = 0
                 res_diff = {'mflux': 0, 'hflux': 0, "Tvar": 0}
                 dTc_dz = -self.Uc * (Tc - Tr) * np.pi * self.Dt / (property_feed["cp_m"] * np.sum(F_in))
             cooler = self.Uc * (Tc - Tr) * np.pi * self.Dt / res_react['tc']
             dF_dz = res_react['mflux'] * dl2dw * (1 - r_v_ins_v_react) * self.nrt + res_diff["mflux"] * self.nit
-            dTr_dz = res_react["Tvar"] * dl2dw * (1 - r_v_ins_v_react) * self.nrt + res_diff["Tvar"] * self.nit + cooler
+            dTr_dz = res_react["Tvar"] * dl2dw * (1 - r_v_ins_v_react) * self.nrt + res_diff["Tvar"] * self.nit \
+                     + cooler + heater / res_react['tc']
 
-            dq_rea_dz = res_react["hflux"] * dl2dw * (1 - r_v_ins_v_react) * self.nrt
-            dq_dif_dz = res_diff['hflux'] * self.nit + cooler * res_react['tc']
-            return np.append(dF_dz, np.array([dTr_dz, dTc_dz, dq_rea_dz, dq_dif_dz]))
+            dq_rea_dz = res_react["hflux"] * dl2dw * (1 - r_v_ins_v_react) * self.nrt  # W/m
+            dq_dif_dz = res_diff['hflux'] * self.nit + cooler * res_react['tc']  # W/m
+            return np.append(dF_dz, np.array([dTr_dz, dTc_dz, dq_rea_dz, dq_dif_dz, heater]))
 
         z_span = [0, L]
         Tc_ini = self.Tc if status == 1 else self.T_feed
-        ic = np.append(F_in, np.array([T_in, Tc_ini, 0, 0]))
+        ic = np.append(F_in, np.array([T_in, Tc_ini, 0, 0, 0]))
         res_sim = scipy.integrate.solve_ivp(model, z_span, ic, method='LSODA', t_eval=np.linspace(0, L, 1000))
         res = np.vstack((np.linspace(0, L, 1000), res_sim.y))
         return res
@@ -310,7 +314,8 @@ class Simulation(Insulation):
         except FileNotFoundError:
             res_save.to_excel(res_path, index=False, header=True, sheet_name=loop)
         if save_profile == 1 and r_metric["conversion"] > 0.25:
-            save_data = pd.DataFrame(res_profile.T, columns=['z'] + self.comp_list + ['Tr', 'Tc', 'q_react', 'q_diff'])
+            save_data = pd.DataFrame(res_profile.T, columns=['z'] + self.comp_list
+                                                            + ['Tr', 'Tc', 'q_react', 'q_diff', 'q_heater'])
             sim_path = 'result/sim_profile_%s_%s_%s_%s_%s_%s_%s_%s_%s_%.2f.xlsx' \
                        % (ks, self.kn_model, self.status, self.recycle, self.Dt, self.L1,
                           self.T0, self.P0, self.Tc, self.sv)

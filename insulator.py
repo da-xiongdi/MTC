@@ -18,6 +18,7 @@ class Insulation(Reaction):
         self.insulator_para = insulator_para
         self.nit = self.insulator_para["nit"]  # tube number of the insulator
         self.location = self.insulator_para["io"]
+        self.heater = self.insulator_para["heater"]
         if self.location == 0:
             self.Din = self.Dt  # self.insulator_para['Din']
             self.Do = self.Din + self.insulator_para['Thick'] * 2
