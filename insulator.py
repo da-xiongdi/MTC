@@ -39,10 +39,10 @@ class Insulation(Reaction):
                 sigma_mix[i, j] = (sigma[i] + sigma[j]) / 2
                 epsilon_mix[i, j] = (epsilon[i] * epsilon[j]) ** 0.5
                 mass_mix[i, j] = 2 / (1 / mass[i] + 1 / mass[j])
-                T_star = k * T / epsilon_mix[i, j]
+                T_star = k * T / (epsilon_mix[i, j] * k)
                 omega = 1.06036 / T_star ** 0.1561 + 0.193 / np.exp(0.47635 * T_star) \
                         + 1.03587 / np.exp(1.52996 * T_star) + 1.76474 / np.exp(3.89411 * T_star)
-                D_bi[i, j] = 0.00266 * T ** 1.5 / (P * mass_mix[i, j] ** 0.5 * sigma_mix[i, j] ** 2 * omega)
+                D_bi[i, j] = 2 * 1e-4 * 0.00266 * T ** 1.5 / (P * mass_mix[i, j] ** 0.5 * sigma_mix[i, j] ** 2 * omega)
         return D_bi
 
     @staticmethod

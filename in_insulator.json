@@ -2,11 +2,11 @@
    "insulator": {
     "status": "on",
     "Din": [0.05],
-    "Thick":0.015,
+    "Thick":0.15,
     "nit": 1,
-    "Tc": [313.15],
+    "Tc": [323.15],
     "io": "in",
-    "qm": 1,
+    "qm": 0.05,
      "q": 0
   },
   "unit": {

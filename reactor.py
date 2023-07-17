@@ -147,7 +147,7 @@ class Reaction:
         for comp in Pi_gas.index:
             gas = "N2" if comp == "CO" else comp  # "CO" is not available in CoolProp
             if Pi_gas[comp] > 1000:
-                if T > Ti_sat[comp]:
+                if T > Ti_sat[comp]*1.05:
                     # thermal conductivity, W/(m K)
                     k[i] = PropsSI('L', 'T', T, 'P', Pt, gas)
                     # viscosity, Pa S
