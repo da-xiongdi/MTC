@@ -19,13 +19,17 @@ class Insulation(Reaction):
         self.nit = self.insulator_para["nit"]  # tube number of the insulator
         self.location = self.insulator_para["io"]
         self.heater = self.insulator_para["heater"]
+
+        self.heater_pos = self.insulator_para["position"]
         if self.location == 0:
             self.Din = self.Dt  # self.insulator_para['Din']
             self.Do = self.Din + self.insulator_para['Thick'] * 2
+            # self.heater = max(self.heater, (523 - 333) / self.insulator_para['Thick'] * 0.2 * np.pi * self.Dt / 3)
         else:
             self.Din = self.insulator_para['Din']
             self.Do = self.Din + self.insulator_para['Thick'] * 2
             self.sv = self.sv * self.Dt ** 2 / (self.Dt ** 2 - self.Do ** 2)
+            # self.heater = max(self.heater, (523 - 333) / self.insulator_para['Thick'] * 0.2 * np.pi * self.Do / 3)
 
     @staticmethod
     def bi_diff(T, P):
@@ -43,8 +47,17 @@ class Insulation(Reaction):
                 T_star = k * T / (epsilon_mix[i, j] * k)
                 omega = 1.06036 / T_star ** 0.1561 + 0.193 / np.exp(0.47635 * T_star) \
                         + 1.03587 / np.exp(1.52996 * T_star) + 1.76474 / np.exp(3.89411 * T_star)
-                D_bi[i, j] = 2 * 1e-4 * 0.00266 * T ** 1.5 / (P * mass_mix[i, j] ** 0.5 * sigma_mix[i, j] ** 2 * omega)
+                D_bi[i, j] = 1e-4 * 0.00266 * T ** 1.5 / (P * mass_mix[i, j] ** 0.5 * sigma_mix[i, j] ** 2 * omega)
+        print(D_bi)
         return D_bi
+
+    @staticmethod
+    def bi_md(T, P):
+        Dij_523 = np.array([[4.36E-07, 5.81E-06],
+                            [5.80E-07, 5.74E-06]])
+        # Dij_523 = np.array([[4.25E-07, 5.81E-06],
+        #                     [5.62E-7, 5.74E-06]])
+        return Dij_523 * (T / 523) ** 1.5 * (70 / P)
 
     @staticmethod
     def ode_single(inner_cond, outer_cond, P, properties):
@@ -96,14 +109,21 @@ class Insulation(Reaction):
         :param properties: heat capacity, diffusion coefficient, thermal conductivity of mixture; list
         :return: concentration and its slop
         """
+
         P = P * 1e5  # convert bar to pa
         x_main = x_in[["CO2", "H2"]] / np.sum(x_in[["CO2", "H2"]])
         [cp_c, cp_d, k] = properties
         [T1, x_c1, x_d1, r1] = inner_cond
         [T2, x_c2, x_d2, r2] = outer_cond
-        D_bi = self.bi_diff((T1 + T2) / 2, P / 1e5)
-        D_31, D_32 = D_bi[2, 0], D_bi[2, 1]
-        D_41, D_42 = D_bi[3, 0], D_bi[3, 1]
+        # D_bi = self.bi_diff((T1 + T2) / 2, P / 1e5)
+        # D_31, D_32 = D_bi[2, 0], D_bi[2, 1]
+        # D_41, D_42 = D_bi[3, 0], D_bi[3, 1]
+        D_bi = self.bi_md((T1 + T2) / 2, P / 1e5)
+        # print(self.bi_diff((T1 + T2) / 2, P / 1e5))
+        # print(D_bi)
+        D_31, D_32 = D_bi[0, 0], D_bi[0, 1]
+        D_41, D_42 = D_bi[1, 0], D_bi[1, 1]
+        # print(D_32,D_42)
         # D_ca, D_cb = 7.53e-6, 1.19e-5  # 9e-6, 1.5e-5  # 2.5e-5, 3e-5
         # D_da, D_db = 1.15e-5, 1.62e-5  # 1.5e-5, 2.1e-5
         D_cm_id = 1 / (0.25 / D_31 + 0.75 / D_32)
@@ -162,6 +182,7 @@ class Insulation(Reaction):
 
         # insulator parameter
         radium = [self.Din / 2, self.Do / 2]
+        # print(radium)
 
         # calculate the partial pressure
         Pi_h = pd.Series(Pi, index=self.comp_list, dtype="float")  # pressure of gases in the reactor, bar
@@ -289,7 +310,7 @@ class Insulation(Reaction):
 # comp = ['CO2', 'H2']
 # P = pd.Series(P, index=comp)
 # print(Insulation.mixture_property(480, P))
-
+# print(Insulation.bi_diff(298, 1))
 
 # def ode_single(inner_cond, outer_cond, P, properties):
 #     """

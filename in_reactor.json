@@ -1,13 +1,13 @@
 {
   "reactor": {
-    "L1": 2,
+    "L1": [0.5],
     "Dt":[0.05],
     "nrt": 1,
     "rhoc": 1950,
     "phi": 0.67,
     "recycle": "off",
-    "stage": 1,
-    "L2":1,
+    "stage": 3,
+    "L2":1.5,
     "Uc": 0
   },
   "unit": {

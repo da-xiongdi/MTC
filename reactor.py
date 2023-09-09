@@ -3,7 +3,7 @@ from CoolProp.CoolProp import PropsSI
 import pandas as pd
 
 R = 8.314  # J/mol/K
-ks, vof = 0.2, 0.85 # 1.5 for 0.42 1 for 0.3 0.2 for 0.15
+ks, vof = 0.2, 0.8 # 1.5 for 0.42 1 for 0.3 0.2 for 0.15
 
 
 class Reaction:

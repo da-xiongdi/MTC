@@ -81,7 +81,7 @@ class ReadData:
             T = self.feed_para["condition"]['T'][0]
             T_feed = self.feed_para["condition"]['T_feed'][0]
             P = self.feed_para["condition"]['P'][0]
-            feed = np.append(np.array([T, T_feed,P, 0]), feed)
+            feed = np.append(np.array([T, T_feed, P, 0]), feed)
             feed_para = pd.DataFrame(feed.reshape(1, len(feed)),
                                      columns=['T', 'T_feed', 'P', 'fresh', "CO2", "H2", "Methanol", "H2O", "CO"])
         return feed_para
@@ -93,28 +93,33 @@ class ReadData:
         status = 1 if self.insulator_para['status'] == 'on' else 0
         location = 0 if self.insulator_para["io"] == 'in' else 1
         nit = self.insulator_para["nit"]  # tube number of the insulator
-        Thick = self.insulator_para['Thick']
-        qm = self.insulator_para['qm']
+
         q = self.insulator_para['q']
-        heater = self.insulator_para['heater']
 
+        position = self.insulator_para['position']
         # insulator para frame
-        Din_array = self.data_array(self.insulator_para['Din'])  # Din should be same with the Dt of reactor
+        Din_array = self.data_array(self.insulator_para['Din'])
         Tc_array = self.data_array(self.insulator_para['Tc'])
+        Thick_array = self.data_array(self.insulator_para['Thick'])
+        qm_array = self.data_array(self.insulator_para['qm'])
+        heater_array = self.data_array(self.insulator_para['heater'])
+        # print(Thick_array)
 
-        insulator_num = len(Tc_array)
+        insulator_num = len(Tc_array) * len(Din_array)*len(Thick_array)*len(qm_array)*len(heater_array)
         insulator_para = pd.DataFrame(index=np.arange(insulator_num), columns=list(self.insulator_para.keys()))
         i = 0
         for Din in Din_array:
             for Tc in Tc_array:
-                insulator_para.iloc[i] = [status, Din, Thick, nit, Tc, location, qm, q, heater]
-                i += 1
+                for Thick in Thick_array:
+                    for qm in qm_array:
+                        for heater in heater_array:
+                            insulator_para.iloc[i] = [status, Din, Thick, nit, Tc, location, qm, q, heater, position]
+                            i += 1
 
         return insulator_para
 
     @property
     def reactor_data(self):
-        L1 = self.react_para['L1']  # length, m
         nrt = self.react_para['nrt']  # number of the reaction tube
         phi = self.react_para["phi"]  # void of fraction
         rhoc = self.react_para["rhoc"]  # density of catalyst, kg/m3
@@ -124,13 +129,16 @@ class ReadData:
         recycle = 1 if self.react_para['recycle'] == "on" else 0
 
         # reactor para frame
+        L1_array = self.data_array(self.data_array(self.react_para['L1']))
+
         Dt_array = self.data_array(self.react_para['Dt'])
-        reactor_num = len(Dt_array)
+        reactor_num = len(Dt_array)*len(L1_array)
         react_para = pd.DataFrame(index=np.arange(reactor_num), columns=list(self.react_para.keys()))
         i = 0
         for Dt in Dt_array:
-            react_para.iloc[i] = [L1, Dt, nrt, rhoc, phi, recycle, stage, L2, Uc]
-            i += 1
+            for L1 in L1_array:
+                react_para.iloc[i] = [L1, Dt, nrt, rhoc, phi, recycle, stage, L2, Uc]
+                i += 1
         return react_para
 
     @staticmethod
