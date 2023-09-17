@@ -175,18 +175,15 @@ class Insulation(Reaction):
         """
         # calculate the correction to volumetric flow rate (m3/s)
         # calculate the partial pressure
-        # print(F_dict)
+
         Ft = np.sum(F_dict)
         v = self.v0 * (self.P0 / P) * (Th / self.T0) * (Ft / self.Ft0)
         Pi = F_dict * R * Th / v * 1e-5  # bar
 
         # insulator parameter
         radium = [self.Din / 2, self.Do / 2]
-        # print(radium)
-
-        # calculate the partial pressure
-        Pi_h = pd.Series(Pi, index=self.comp_list, dtype="float")  # pressure of gases in the reactor, bar
-        xi_h = Pi_h / P
+        # calculate the molar fraction of the mix
+        xi_h = pd.Series(F_dict / Ft, index=self.comp_list)
         if xi_h["Methanol"] < 3e-3 or xi_h['H2O'] < 1e-3:
             # if there is no reacted gas, end the calculation
             res = {
@@ -198,23 +195,22 @@ class Insulation(Reaction):
             return res
 
         # vle calculation, determine the dew pressure
-        vle = VLE(Tc, comp=xi_h)
+        vle_c = VLE(Tc, comp=self.comp_list)
+        # P_dew_cds = vle.dew_p(y=xi_h['Methanol', 'H2O'])
+        # P_dew = vle.dew_p(y=xi_h,x_guess=)
         # print(vle.dew_p_all, vle.dew_p([2,3])['P']/(xi_h["Methanol"] + xi_h['H2O']))
         # P_dew = vle.dew_p([2, 3])['P'] / (xi_h["Methanol"] + xi_h['H2O']) * 1.1  # vle.dew_p_all['P']
         P_sat_CH3OH = PropsSI('P', 'T', Tc, 'Q', 1, "Methanol")
         P_sat_H2O = PropsSI('P', 'T', Tc, 'Q', 1, "H2O")
         P_dew = (1 / (xi_h["Methanol"] / P_sat_CH3OH + xi_h['H2O'] / P_sat_H2O)) * 1e-5
-        # print(P_dew)
-        # P_dew_temp = vle.dew_p_all
-        # P_dew = vle.dew_p([2, 3])['P'] / (xi_h["Methanol"] + xi_h['H2O']) if P_dew_temp is None else P_dew_temp['P']
-        # print(Tc, P_dew_temp,P_dew)
+
         if P < P_dew:
             qcv_delta = 1e5
             Tw = Th - 0.1
             while qcv_delta > 20:
                 # condensation does not occur
                 # gas properties inside the insulator
-                mix_pro_ave = self.mixture_property((Tc + Tw) / 2, Pi_h)
+                mix_pro_ave = self.mixture_property((Tc + Tw) / 2, xi_h, P)  # rho is not used, hence z=1 is used
                 k_e = mix_pro_ave["k"] * vof + ks * (1 - vof)  # effective heat conductivity of the insulator
 
                 # heat conduction along the insulator
@@ -224,7 +220,7 @@ class Insulation(Reaction):
                 qcv_delta = 5  # abs(qcv_cond - qcv_conv)
                 Tw -= 1
             # temperature variation inside the reactor
-            property_h = self.mixture_property(Th, Pi_h)
+            property_h = self.mixture_property(Th, xi_h, P) # rho is not used, hence z=1 is used
             dT = qcv_cond / Ft / property_h["cp_m"]
             dT = -dT if self.location == 0 else dT
             res = {
@@ -236,16 +232,15 @@ class Insulation(Reaction):
         else:
             # condensation occurs
             # calculate the composition of vapor and liquid phase
-            flash_comp = vle.flash(P)
+            flash_comp = vle_c.flash(P=P, mix=xi_h)
             xi_c = flash_comp.loc['V']
-            Pi_c = xi_c * P
 
             qcv_delta = 1e5
             Tw = Th - 0.1
             while qcv_delta > 20:
                 # gas properties inside the insulator
-                property_c = self.mixture_property(Tc, Pi_c)
-                property_w = self.mixture_property(Tw, Pi_h)
+                property_c = self.mixture_property(Tc, xi_c, P)
+                property_w = self.mixture_property(Tw, xi_h, P)
                 mix_pro_ave = (property_w + property_c) / 2
                 k_e = mix_pro_ave["k"] * vof + ks * (1 - vof)  # effective heat conductivity of the insulator
 
@@ -278,7 +273,7 @@ class Insulation(Reaction):
             # plt.plot(xsol, ode_res[3])
             # plt.show()
 
-            property_h = self.mixture_property(Th, Pi_h)
+            property_h = self.mixture_property(Th, xi_h, P)
             dT = qcv_cond / Ft / property_h["cp_m"]  # k/m
             dev = gap_min / xi_h["H2O"]
             if dev > 0.1: print([na_CH3OH, na_H20], dev, 'dev too big')

@@ -6,8 +6,8 @@
     "rhoc": 1950,
     "phi": 0.67,
     "recycle": "off",
-    "stage": 3,
-    "L2":1.5,
+    "stage": 1,
+    "L2":3,
     "Uc": 0
   },
   "unit": {

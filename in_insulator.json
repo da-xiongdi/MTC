@@ -1,14 +1,14 @@
 {
    "insulator": {
-    "status": "on",
+    "status": "off",
     "Din": [0.18],
     "Thick":[0.01],
     "nit": 1,
     "Tc": [360],
     "io": "in",
-    "qm": [1.7],
+    "qm": [2.5],
      "q": 0,
-     "heater": [495],
+     "heater": [465],
      "position": 0
   },
   "unit": {

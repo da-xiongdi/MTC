@@ -142,8 +142,7 @@ class Simulation(Insulation):
                              index=['ratio', 'heat_recycle', 'duty', 'delta_H'])
         return p_metric
 
-    def one_pass(self, status=None, L=None, F_in=None, T_in=None, Tc_cond='up',
-                 diff_in=None):
+    def one_pass(self, status=None, L=None, F_in=None, T_in=None, Tc_cond='up', diff_in=None):
         """
         simulation of one-pass reaction for CO2 to CH3OH
         :param status: status of insulator, 1 or 0
@@ -168,14 +167,14 @@ class Simulation(Insulation):
         else:
             if L == 1.5:
                 self.Dt = 0.05
-                self.heater = 330
+                # self.heater = 330
             else:
                 self.Dt = 0.085
-                self.heater = 490
+                # self.heater = 490
         self.Din = self.Dt  # self.insulator_para['Din']
         self.Do = self.Din + self.insulator_para['Thick'] * 2
         latent_heat = PropsSI('HMOLAR', 'P', 1e5, 'Q', self.q_v, "water") - PropsSI('HMOLAR', 'P', 1e5, 'Q', 0, "water")
-        property_feed = self.mixture_property(self.T_feed, F_feed_pd / np.sum(self.F0) * self.P0)
+        property_feed = self.mixture_property(self.T_feed, xi_gas=F_feed_pd/np.sum(self.F0), Pt=P)
         print(self.Dt, self.heater, L)
 
         def model(z, y):
@@ -282,9 +281,12 @@ class Simulation(Insulation):
         F_out_1, Tr_out_1, Tc_out_1 = res_1[1:6, -1], res_1[-5, -1], res_1[-4, -1]
         diff_out_1 = res_1[-3:, -1]
         res_2 = self.one_pass(status=1, L=self.L2, F_in=F_out_1, T_in=Tr_out_1, Tc_cond='up', diff_in=diff_out_1)
+
         F_out_2, Tr_out_2, Tc_out_2 = res_2[1:6, -1], res_2[-5, -1], res_2[-4, -1]
         diff_out_2 = res_2[-3:, -1]
+
         res_3 = self.one_pass(status=1, L=L3, F_in=F_out_2, T_in=Tr_out_2, Tc_cond='up', diff_in=diff_out_2)
+
         res_profile = np.hstack((res_1, res_2, res_3))
         res_profile[0] = np.hstack((np.linspace(0, self.L1, 1000), np.linspace(0, self.L2, 1000) + self.L1,
                                     np.linspace(0, L3, 1000) + self.L1 + self.L2))
@@ -373,7 +375,6 @@ class Simulation(Insulation):
         reactor_cond['L1'] = self.L1
         insulator_cond['heater'] = self.heater
         loop = "direct" if self.recycle == 0 else loop
-
         if self.recycle == 1:
             res_profile, F_recycle = self.recycler(loop=loop, rtol=rtol)
             r_metric = self.reactor_metric(res_profile)
@@ -391,12 +392,14 @@ class Simulation(Insulation):
             elif self.stage == 2:
                 res_profile = self.dual_reactor(self.F0, self.T0)
             elif self.stage == 3:
+                print("*" * 10)
                 res_profile = self.tri_reactor(self.F0, self.T0)
+                print("*" * 10)
             # res_profile = self.one_pass() if self.stage == 1 else self.dual_reactor(self.F0, self.T0)
             r_metric = self.reactor_metric(res_profile)
             metric = r_metric
             res_path = 'result/sim_one_pass_%s_%s_%s_log.xlsx' % (ks, self.kn_model, datetime.now().date())
-
+        print("*"*10)
         print(r_metric)
         # concat the input para with the performance metrics
         res = pd.concat([reactor_cond, insulator_cond, feed_cond, metric])
