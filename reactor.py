@@ -2,8 +2,7 @@ import numpy as np
 from CoolProp.CoolProp import PropsSI
 import pandas as pd
 
-import vle
-from vle import VLE
+from prop_calculator import VLE, mixture_property
 
 R = 8.314  # J/mol/K
 ks, vof = 0.2, 0.8  # 1.5 for 0.42 1 for 0.3 0.2 for 0.15
@@ -15,18 +14,14 @@ class Reaction:
     energy and mass balance are calculated
     """
 
-    def __init__(self, reactor_para, chem_para, feed_para):
+    def __init__(self, L, D, n, phi, rho, chem_para, T0, P0, F0, eos):
+
+        # 0 for ideal 1 for SRK
+        self.eos = eos
 
         # reactor parameters
-        self.react_para = reactor_para
-        self.L1, self.Dt = self.react_para['L1'], self.react_para['Dt']  # length, m
-        self.stage = self.react_para["stage"]
-        self.L2 = self.react_para["L2"]
-        self.nrt = self.react_para['nrt']  # number of the reaction tube
-        self.phi = self.react_para["phi"]  # void of fraction
-        self.rhoc = self.react_para["rhoc"]  # density of catalyst, kg/m3
-        self.recycle = self.react_para['recycle']  # reactor with recycle or not
-        self.Uc = self.react_para['Uc']  # total heat transfer coefficient of reactor, W/m2 K, 0 means adiabatic
+        self.L, self.Dt, self.n = L, D, n
+        self.phi, self.rho = phi, rho
         self.ds = 5e-3  # catalyst particle diameter
 
         # prescribed chem data of reaction
@@ -40,37 +35,10 @@ class Reaction:
             self.react_sto[i] = self.chem_data["stoichiometry"][key]
 
         # feed gas parameter
-        self.feed_para = feed_para
-        self.P0, self.T0 = self.feed_para["P"], self.feed_para["T"]  # P0 bar, T0 K
-        self.T_feed = self.feed_para["T_feed"]
-
-        if self.feed_para["fresh"] == 1:  # the feed to the plant is fresh stream
-            self.F0 = np.zeros(len(self.comp_list))  # component of feed gas, mol/s; ndarray
-            # volumetric flux per tube from space velocity
-            if self.feed_para["H2"] == 0:
-                self.sv = self.feed_para["Sv"]
-                # volumetric flux per tube under input temperature and pressure, m3/s
-                self.v0 = self.sv * self.L1 * np.pi * self.Dt ** 2 / 4 / 3600 / self.nrt
-                self.Ft0 = self.P0 * 1e5 * self.v0 / R / self.T0  # total flux of feed,mol/s
-                self.F0[0] = 1 / (1 + 1 * self.feed_para["H2/CO2"] + self.feed_para['CO/CO2']) * self.Ft0
-                self.F0[4] = self.F0[0] * self.feed_para['CO/CO2']
-                self.F0[1] = self.Ft0 - self.F0[0] - self.F0[4]
-                self.H2 = self.F0[1] * 8.314 * 273.15 / 1e5 * 3600  # Nm3/h
-            else:
-                self.H2 = self.feed_para["H2"]
-                self.F0[1] = self.H2 / 3600 * 1e5 / R / 273.15  # mol/s
-                self.F0[0] = self.F0[1] / self.feed_para["H2/CO2"]
-                self.F0[4] = self.F0[0] * self.feed_para['CO/CO2']
-                self.Ft0 = np.sum(self.F0)
-                self.v0 = self.Ft0 * R * self.T0 / (self.P0 * 1e5)
-                self.sv = self.v0 * self.nrt * 3600 * 4 / self.L1 / np.pi / self.Dt ** 2
-            # print(self.sv, self.H2)
-        else:  # recycled stream
-            self.F0 = self.feed_para[self.comp_list].to_numpy()
-            self.Ft0 = np.sum(self.F0)
-            self.v0 = self.Ft0 * R * self.T0 / (self.P0 * 1e5)
-            self.sv = self.v0 * self.nrt * 3600 * 4 / self.L1 / np.pi / self.Dt ** 2
-            self.H2 = self.F0[1] * R * 273.15 / 1E5
+        self.R = 8.314
+        self.P0, self.T0 = P0, T0  # P0 bar, T0 K
+        self.F0, self.Ft0 = F0, np.sum(F0)
+        self.v0 = self.Ft0 * self.R * self.T0 / (self.P0 * 1e5)
 
     @staticmethod
     def react_H(T, in_dict):
@@ -120,101 +88,25 @@ class Reaction:
             react_rate_constant[key] = value[0] * np.exp(value[1] / T / R)
         return react_rate_constant
 
-    @staticmethod
-    def mixture_property(T, xi_gas, Pt, z=1, rho_only=False):
-        """
-        calculate the properties of gas mixture
-        :param T: gas temperature, K
-        :param xi_gas: molar fraction; pd.Serize
-        :param Pt: total pressure, bar
-        :param z: compression factor
-        :return: thermal conductivity W/(m K), viscosity Pa s, heat capacity J/mol/K; pd.series
-        """
-        # prepare data for calculation
-        n = len(xi_gas.index)  # number of gas species
-
-        [cp, k, vis, M, rho] = np.ones((5, n)) * 1e-5
-        pi_gas = xi_gas * Pt * 1e5  # convert bar to pa
-        Ti_sat = pd.Series(np.ones(n) * 100, index=xi_gas.index)
-        if 'Methanol' in xi_gas.index:
-            try:
-                Ti_sat['Methanol'] = PropsSI('T', 'P', pi_gas['Methanol'], 'Q', 1, 'Methanol')
-            except ValueError:
-                Ti_sat['Methanol'] = 300
-        if "H2O" in xi_gas.index:
-            try:
-                Ti_sat['H2O'] = PropsSI('T', 'P', pi_gas['H2O'], 'Q', 1, 'H2O')
-            except ValueError:
-                Ti_sat['H2O'] = 300
-        i = 0
-        for comp in xi_gas.index:
-            M[i] = PropsSI('MOLARMASS', 'T', T, 'P', 1e5, comp)  # molar weight, g/mol
-            i += 1
-        M_m = np.sum(M * xi_gas)  # molar weight of mixture
-        rho_m = Pt * 1E5 * M_m / 1000 / (z * R * T)  # kg/m3 np.sum(rho)
-        if rho_only:
-            return pd.Series([0, 0, rho_m, cp[2], cp[3], 0],
-                             index=["k", "vis", 'rho', 'cp_' + xi_gas.index[2], 'cp_' + xi_gas.index[3], "cp_m"])
-
-        i = 0
-        # calculate the properties of pure gases
-        for comp in xi_gas.index:
-            gas = "N2" if comp == "CO" else comp  # "CO" is not available in CoolProp
-            if pi_gas[comp] > 1000:
-                if T > Ti_sat[comp] * 1.05:
-                    # thermal conductivity, W/(m K)
-                    k[i] = PropsSI('L', 'T', T, 'P', Pt, gas)
-                    # viscosity, Pa S
-                    vis[i] = PropsSI('V', 'T', T, 'P', Pt, gas)
-                    # heat capacity, J/(mol K)
-                    cp[i] = PropsSI('CPMOLAR', 'T', T, 'P', Pt, gas)
-                    # density, kg/m3
-                    # rho[i] = PropsSI('D', 'T', T, 'P', xi_gas[comp], gas)
-                else:
-                    cp[i] = PropsSI('CPMOLAR', 'T', T, 'Q', 1, gas)
-                    k[i] = PropsSI('L', 'T', T, 'Q', 1, gas)
-                    vis[i] = PropsSI('V', 'T', T, 'Q', 1, gas)
-                    # rho[i] = PropsSI('D', 'T', T, 'Q', 1, gas)
-            else:
-                # thermal conductivity, W/(m K)
-                k[i] = 0
-                # viscosity, Pa S
-                vis[i] = 1e-10
-                # heat capacity, J/(mol K)
-                cp[i] = 0
-                # density, kg/m3
-                rho[i] = 0
-            i += 1
-
-        # calculate the properties of mixture
-        cp_m = np.sum(cp * xi_gas)
-        phi, denominator = np.ones((n, n)), np.ones((n, n))  # Wilke coefficient
-        vis_m, k_m = 0, 0
-        for i in range(n):
-            for j in np.arange(n):
-                phi[i, j] = (1 + (vis[i] / vis[j]) ** 0.5 * (M[j] / M[i]) ** 0.25) ** 2 / (8 * (1 + M[i] / M[j])) ** 0.5
-                denominator[i, j] = xi_gas[j] * phi[i, j]  # if i != j else 0
-            vis_m += xi_gas[i] * vis[i] / np.sum(denominator[i])
-            k_m += xi_gas[i] * k[i] / np.sum(denominator[i])
-        return pd.Series([k_m, vis_m, rho_m, cp[2], cp[3], cp_m],
-                         index=["k", "vis", 'rho', 'cp_' + xi_gas.index[2], 'cp_' + xi_gas.index[3], "cp_m"])
-
     def ergun(self, T, P, F_dict):
         """
         energy and material balance in the reactor
         :param T: operating temperature, K
         :param P: operating pressure, bar
         :param F_dict: molar flow rate of each component, mol/s; ndarray
-        :return: pressure drop per length
+        :return: pressure drop per length, pa/m
         """
         Ft = np.sum(F_dict)
         v = self.v0 * (self.P0 / P) * (T / self.T0) * (Ft / self.Ft0)
         u = v / (np.pi * self.Dt ** 2 / 4)
-        _, z = vle.VLE(T, comp=self.comp_list)
-        gas_property = self.mixture_property(T, F_dict / Ft, z, rho_only=False)
-        Re = self.ds * u * gas_property['rho'] / gas_property['vis'] / (1 - vof)
-        drop_per_length = (150 / Re + 1.75) * (1 - vof) / vof ** 3 * \
-                          (gas_property['rho'] * u ** 2 / self.ds) # Pa/m
+        if self.eos == 1:
+            properties = VLE(T, comp=self.comp_list)
+            _, z = properties.phi(pd.Series(F_dict / Ft, index=self.comp_list), P)
+        elif self.eos == 0:
+            z = 1
+        gas_property = mixture_property(T, pd.Series(F_dict / Ft, index=self.comp_list), z, rho_only=False)
+        Re = self.ds * u * gas_property['rho'] / gas_property['vis'] / self.phi
+        drop_per_length = - (150 / Re + 1.75) * self.phi / (1-self.phi) ** 3 * (gas_property['rho'] * u ** 2 / self.ds)  # Pa/m
         return drop_per_length
 
     def convection(self, T, P, F_dict):
@@ -226,7 +118,7 @@ class Reaction:
         """
         Ft = np.sum(F_dict)
         xi = F_dict / Ft * P
-        mix_property = self.mixture_property(T, pd.Series(xi, self.comp_list), Pt=P)
+        mix_property = mixture_property(T, pd.Series(xi, self.comp_list), Pt=P)
         M = 0.25 * 44 + 0.75 * 2
         Pr = mix_property['vis'] * (mix_property['cp_m'] / (M / 1000)) / mix_property['k']
         v = self.v0 * (self.P0 / P) * (T / self.T0) * (Ft / self.Ft0)  # m3/s
@@ -359,10 +251,12 @@ class Reaction:
 
         # calculate the partial pressure/fugacity
         # calculate the correction to volumetric flow rate (m3/s)
-        vle = VLE(T, self.comp_list)
-        # fugacity coe, compression factor
-        phi, _ = vle.phi(comp=pd.Series(xi, index=self.comp_list), P=P, phase=0)
-        phi = 1
+        if self.eos == 1:
+            # fugacity coe, compression factor
+            vle_cal = VLE(T, self.comp_list)
+            phi, _ = vle_cal.phi(comp=pd.Series(xi, index=self.comp_list), P=P, phase=0)
+        else:
+            phi = 1
         v = self.v0 * (self.P0 / P) * (T / self.T0) * (Ft / self.Ft0)
         Pi = F_dict * R * T / v * 1e-5  # bar
         fi = Pi * phi

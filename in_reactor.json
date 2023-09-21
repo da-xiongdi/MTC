@@ -1,13 +1,12 @@
 {
   "reactor": {
-    "L1": [0.5],
-    "Dt":[0.05],
+    "stage": 2,
+    "L": [[0.5],[2.8]],
+    "Dt":[[0.04],[0.085]],
     "nrt": 1,
     "rhoc": 1950,
     "phi": 0.67,
     "recycle": "off",
-    "stage": 1,
-    "L2":3,
     "Uc": 0
   },
   "unit": {
@@ -15,7 +14,7 @@
     "Dt": "m",
     "nt": "-,number of tube",
     "rhoc": "kg/m3",
-    "phi": "-,vof, ref: Cui, CEJ, 2020",
+    "phi": "-, filling fraction, ref: Cui, CEJ, 2020",
     "io": "in:reaction in the insides of insulator; out:inverse",
     "stage": "number of reactor",
     "Uc": "W/m2 K"

@@ -1,25 +1,25 @@
 {
    "insulator": {
-    "status": "off",
-    "Din": [0.18],
-    "Thick":[0.01],
+    "status": ["off","on"],
+    "Din": [[0.04],[0.08]],
+    "Thick":[[0],[0.01]],
     "nit": 1,
-    "Tc": [360],
+    "Tc": [[0],[360]],
+     "pattern": [-1,1],
     "io": "in",
-    "qm": [2.5],
+    "qm": [[0],[2.5]],
      "q": 0,
-     "heater": [465],
-     "position": 0
+     "heater": [[0],[470]]
   },
   "unit": {
     "Din": "m",
     "Thick": "m",
     "nit": "-,number of tube",
     "Tc": "K, output temperature of water in the cold side",
+    "pattern": "flow direction of cold media, 1 counter flow",
     "io": "in:reaction in the insides of insulator; out:inverse",
     "qm": "mol/s, flux of water in the cold side",
     "q": "-,vapor fraction of water at outside",
-    "heater": "W/m",
-    "position": "origin position of heater, m"
+    "heater": "W/m"
   }
 }

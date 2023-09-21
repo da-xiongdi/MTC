@@ -2,6 +2,7 @@ import time
 
 from read import ReadData
 from simulator import Simulation
+# from sim import Simulation
 
 a = time.time()
 model = 'BU'
@@ -20,7 +21,7 @@ for i in range(feed_data.shape[0]):
             # insulator_data['Din'].iloc[k] = reactor_data['Dt'].iloc[j]
             try:
                 sim = Simulation(reactor_data.iloc[j], chem_data, feed_data.iloc[i],
-                                 insulator_data.iloc[k])
+                                 insulator_data.iloc[k], eos=1)
                 sim.sim(save_profile=1, loop='indirect', rtol=0.01)
                 del sim
             except ValueError:

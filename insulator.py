@@ -1,35 +1,24 @@
 import matplotlib.pyplot as plt
 
-from reactor import Reaction, vof, ks
+from reactor import vof, ks
 import numpy as np
 import pandas as pd
 import scipy
 from CoolProp.CoolProp import PropsSI
-from vle import VLE
+from prop_calculator import VLE, mixture_property
 
 R = 8.314
 
 
-class Insulation(Reaction):
-    def __init__(self, reactor_para, chem_para, feed_para, insulator_para):
-        super(Insulation, self).__init__(reactor_para, chem_para, feed_para)
+class Insulation:
+    def __init__(self, Do, Din, n, location):
 
         # insulator parameters
-        self.insulator_para = insulator_para
-        self.nit = self.insulator_para["nit"]  # tube number of the insulator
-        self.location = self.insulator_para["io"]
-        self.heater = self.insulator_para["heater"]
-
-        self.heater_pos = self.insulator_para["position"]
-        if self.location == 0:
-            self.Din = self.Dt  # self.insulator_para['Din']
-            self.Do = self.Din + self.insulator_para['Thick'] * 2
-            # self.heater = max(self.heater, (523 - 333) / self.insulator_para['Thick'] * 0.2 * np.pi * self.Dt / 3)
-        else:
-            self.Din = self.insulator_para['Din']
-            self.Do = self.Din + self.insulator_para['Thick'] * 2
-            self.sv = self.sv * self.Dt ** 2 / (self.Dt ** 2 - self.Do ** 2)
-            # self.heater = max(self.heater, (523 - 333) / self.insulator_para['Thick'] * 0.2 * np.pi * self.Do / 3)
+        self.nit = n  # tube number of the insulator
+        self.location = location
+        self.Do, self.Din = Do, Din
+        self.thick = (self.Do - self.Din) / 2
+        self.comp_list = ["CO2", "H2", "Methanol", "H2O", "CO"]
 
     @staticmethod
     def bi_diff(T, P):
@@ -48,7 +37,6 @@ class Insulation(Reaction):
                 omega = 1.06036 / T_star ** 0.1561 + 0.193 / np.exp(0.47635 * T_star) \
                         + 1.03587 / np.exp(1.52996 * T_star) + 1.76474 / np.exp(3.89411 * T_star)
                 D_bi[i, j] = 1e-4 * 0.00266 * T ** 1.5 / (P * mass_mix[i, j] ** 0.5 * sigma_mix[i, j] ** 2 * omega)
-        print(D_bi)
         return D_bi
 
     @staticmethod
@@ -58,46 +46,6 @@ class Insulation(Reaction):
         # Dij_523 = np.array([[4.25E-07, 5.81E-06],
         #                     [5.62E-7, 5.74E-06]])
         return Dij_523 * (T / 523) ** 1.5 * (70 / P)
-
-    @staticmethod
-    def ode_single(inner_cond, outer_cond, P, properties):
-        """
-        ode for the concentration distribution along the channel, only one condensate
-        :param inner_cond: temperature, molar fraction, and radius at inside;list
-        :param outer_cond: temperature, molar fraction, and radius at outside; list
-        :param P: pressure of mixture, bar
-        :param properties: heat capacity, diffusion coefficient, thermal conductivity of mixture; list
-        :return: concentration and its slop
-        """
-
-        P = P * 1e5
-        D_ca, D_cb = 7.1e-6, 1.1e-5
-        D_dm = 9.9e-5  # 1 / (0.25 / D_da + 0.75 / D_db)
-        [cp, D, k] = properties
-        [T1, c1, r1] = inner_cond
-        [T2, c2, r2] = outer_cond
-
-        def model(z, y):
-            [x, N, T, dTdz] = y  # [-,mol/s/m2, K, K/m]
-            dx_dz = -N * (1 - x) / D_dm / (P / R / T)
-            dN_dz = -N / z
-            d2T_dz2 = -dTdz / z + N * cp * dTdz / k
-            return np.vstack((dx_dz, dN_dz, dTdz, d2T_dz2))
-
-        def bound(ya, yb):
-            return np.array([ya[0] - c1, ya[2] - T1, yb[0] - c2, yb[2] - T2])
-
-        xa, xb = r1, r2
-        xini = np.linspace(xa, xb, 11)
-        yini = np.zeros((4, xini.size))
-        yini[0] = np.linspace(c1, c2, xini.size)
-        yini[1] = -D_dm * (2 * P / R / (T1 + T2)) * (c1 - c2) / (r1 - r2)
-        yini[2] = np.linspace(T1, T2, xini.size)
-        yini[3] = (T1 - T2) / (r1 - r2)
-        res = scipy.integrate.solve_bvp(model, bound, xini, yini, tol=1e-10, max_nodes=1000)
-        xsol = np.linspace(xa, xb, 200)
-        ysol = res.sol(xsol)
-        return ysol
 
     def ode_multi(self, x_in, inner_cond, outer_cond, P, properties):
         """
@@ -115,17 +63,12 @@ class Insulation(Reaction):
         [cp_c, cp_d, k] = properties
         [T1, x_c1, x_d1, r1] = inner_cond
         [T2, x_c2, x_d2, r2] = outer_cond
-        # D_bi = self.bi_diff((T1 + T2) / 2, P / 1e5)
-        # D_31, D_32 = D_bi[2, 0], D_bi[2, 1]
-        # D_41, D_42 = D_bi[3, 0], D_bi[3, 1]
+
         D_bi = self.bi_md((T1 + T2) / 2, P / 1e5)
-        # print(self.bi_diff((T1 + T2) / 2, P / 1e5))
-        # print(D_bi)
+
         D_31, D_32 = D_bi[0, 0], D_bi[0, 1]
         D_41, D_42 = D_bi[1, 0], D_bi[1, 1]
-        # print(D_32,D_42)
-        # D_ca, D_cb = 7.53e-6, 1.19e-5  # 9e-6, 1.5e-5  # 2.5e-5, 3e-5
-        # D_da, D_db = 1.15e-5, 1.62e-5  # 1.5e-5, 2.1e-5
+
         D_cm_id = 1 / (0.25 / D_31 + 0.75 / D_32)
         D_dm_id = 1 / (0.25 / D_41 + 0.75 / D_42)
         Nc_i = -(2 * P / R / (T2 + T1)) * D_cm_id * (x_c1 - x_c2) / (r1 - r2)
@@ -177,8 +120,6 @@ class Insulation(Reaction):
         # calculate the partial pressure
 
         Ft = np.sum(F_dict)
-        v = self.v0 * (self.P0 / P) * (Th / self.T0) * (Ft / self.Ft0)
-        Pi = F_dict * R * Th / v * 1e-5  # bar
 
         # insulator parameter
         radium = [self.Din / 2, self.Do / 2]
@@ -188,9 +129,7 @@ class Insulation(Reaction):
             # if there is no reacted gas, end the calculation
             res = {
                 "mflux": np.zeros(len(self.comp_list)),
-                "hflux": 0,
-                "Tvar": 0,
-                "dev": 0
+                "hflux": 0, "Tvar": 0, "dev": 0
             }
             return res
 
@@ -210,24 +149,22 @@ class Insulation(Reaction):
             while qcv_delta > 20:
                 # condensation does not occur
                 # gas properties inside the insulator
-                mix_pro_ave = self.mixture_property((Tc + Tw) / 2, xi_h, P)  # rho is not used, hence z=1 is used
+                mix_pro_ave = mixture_property((Tc + Tw) / 2, xi_h, P)  # rho is not used, hence z=1 is used
                 k_e = mix_pro_ave["k"] * vof + ks * (1 - vof)  # effective heat conductivity of the insulator
 
                 # heat conduction along the insulator
                 qcv_cond = -2 * np.pi * k_e * (Tc - Tw) / np.log(radium[1 - self.location] / radium[self.location])
                 # heat convection inside the reactor
-                qcv_conv = -self.convection(Th, P, F_dict) * radium[self.location] * 2 * np.pi * (Tw - Th)
+                # qcv_conv = -self.convection(Th, P, F_dict) * radium[self.location] * 2 * np.pi * (Tw - Th)
                 qcv_delta = 5  # abs(qcv_cond - qcv_conv)
                 Tw -= 1
             # temperature variation inside the reactor
-            property_h = self.mixture_property(Th, xi_h, P) # rho is not used, hence z=1 is used
+            property_h = mixture_property(Th, xi_h, P)  # rho is not used, hence z=1 is used
             dT = qcv_cond / Ft / property_h["cp_m"]
             dT = -dT if self.location == 0 else dT
             res = {
                 "mflux": np.zeros(len(self.comp_list)),
-                "hflux": qcv_cond,
-                "Tvar": dT,
-                "dev": 0
+                "hflux": qcv_cond, "Tvar": dT, "dev": 0
             }
         else:
             # condensation occurs
@@ -239,11 +176,10 @@ class Insulation(Reaction):
             Tw = Th - 0.1
             while qcv_delta > 20:
                 # gas properties inside the insulator
-                property_c = self.mixture_property(Tc, xi_c, P)
-                property_w = self.mixture_property(Tw, xi_h, P)
+                property_c = mixture_property(Tc, xi_c, P)
+                property_w = mixture_property(Tw, xi_h, P)
                 mix_pro_ave = (property_w + property_c) / 2
                 k_e = mix_pro_ave["k"] * vof + ks * (1 - vof)  # effective heat conductivity of the insulator
-
                 # calculate the diffusional flux inside the insulator
                 cold_cond = [Tc, xi_c["Methanol"], xi_c["H2O"], radium[1 - self.location]]
                 hot_cond = [Th, xi_h["Methanol"], xi_h["H2O"], radium[self.location]]
@@ -261,7 +197,7 @@ class Insulation(Reaction):
                 # heat conduction inside the insulator, W/m
                 qcv_cond = -k_e * ode_res[5][-self.location] * radium[-self.location] * 2 * np.pi
                 # heat convection inside the reactor
-                qcv_conv = -self.convection(Th, P, F_dict) * radium[self.location] * 2 * np.pi * (Tw - Th)
+                # qcv_conv = -self.convection(Th, P, F_dict) * radium[self.location] * 2 * np.pi * (Tw - Th)
                 qcv_delta = 5  # abs(qcv_cond - qcv_conv)
                 Tw -= 1
                 # print(Th, Tw, qcv_cond, qcv_conv)
@@ -273,7 +209,7 @@ class Insulation(Reaction):
             # plt.plot(xsol, ode_res[3])
             # plt.show()
 
-            property_h = self.mixture_property(Th, xi_h, P)
+            property_h = mixture_property(Th, xi_h, P)
             dT = qcv_cond / Ft / property_h["cp_m"]  # k/m
             dev = gap_min / xi_h["H2O"]
             if dev > 0.1: print([na_CH3OH, na_H20], dev, 'dev too big')

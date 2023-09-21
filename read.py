@@ -88,34 +88,60 @@ class ReadData:
 
     @property
     def insulator_data(self):
-        # insulator parameters
+        stage = self.react_para['stage']
 
-        status = 1 if self.insulator_para['status'] == 'on' else 0
+        paras_stage = ['Din', 'Thick', 'Tc', 'qm', 'heater']
+        paras_array = {'status': [0 if i == 'off' else 1 for i in self.insulator_para['status']],
+                       'pattern': self.insulator_para["pattern"]}
+        paras_array_name = {'status_name': [f'status{n + 1}' for n in range(stage)],
+                            'pattern_name': [f'pattern{n + 1}' for n in range(stage)]}
+        for n in range(stage):
+            for para_stage in paras_stage:
+                paras_array_name[f'{para_stage}_name'] = [f'{para_stage}{n + 1}' for n in range(stage)]
+                if n == 0:
+                    paras_array[f'{para_stage}_array'] = [self.data_array(self.insulator_para[f'{para_stage}'][n])]
+                else:
+                    paras_array[f'{para_stage}_array'].append(self.data_array(self.insulator_para[f'{para_stage}'][n]))
+
         location = 0 if self.insulator_para["io"] == 'in' else 1
         nit = self.insulator_para["nit"]  # tube number of the insulator
-
         q = self.insulator_para['q']
 
-        position = self.insulator_para['position']
         # insulator para frame
-        Din_array = self.data_array(self.insulator_para['Din'])
-        Tc_array = self.data_array(self.insulator_para['Tc'])
-        Thick_array = self.data_array(self.insulator_para['Thick'])
-        qm_array = self.data_array(self.insulator_para['qm'])
-        heater_array = self.data_array(self.insulator_para['heater'])
-        # print(Thick_array)
+        # generate the combination of reactor length, diameter
 
-        insulator_num = len(Tc_array) * len(Din_array)*len(Thick_array)*len(qm_array)*len(heater_array)
-        insulator_para = pd.DataFrame(index=np.arange(insulator_num), columns=list(self.insulator_para.keys()))
+        paras_array_comb = {}
+        insulator_num = 1
+        for para_stage in paras_stage:
+            if len(paras_array[f'{para_stage}_array']) >= stage:
+                combinations = [[p] for p in paras_array[f'{para_stage}_array'][0]]
+                for i in range(1, stage):
+                    new_combinations = []
+                    for c in combinations:
+                        for p in paras_array[f'{para_stage}_array'][i]:
+                            new_combinations.append(c + [p])
+                    combinations = new_combinations
+                paras_array_comb[f'{para_stage}'] = combinations
+            else:
+                paras_array_comb[f'{para_stage}'] = []  # 或者设置为空列表，根据需要处理
+            insulator_num *= len(paras_array_comb[f'{para_stage}'])
+
+        column_name = []
+        for para_name in paras_array_name.values():
+            column_name += para_name
+        column_name += ['io', 'nit', 'q']
+
+        insulator_para = pd.DataFrame(index=np.arange(insulator_num), columns=column_name)
         i = 0
-        for Din in Din_array:
-            for Tc in Tc_array:
-                for Thick in Thick_array:
-                    for qm in qm_array:
-                        for heater in heater_array:
-                            insulator_para.iloc[i] = [status, Din, Thick, nit, Tc, location, qm, q, heater, position]
-                            i += 1
 
+        for Din in paras_array_comb['Din']:
+            for thick in paras_array_comb['Thick']:
+                for Tc in paras_array_comb['Tc']:
+                    for qm in paras_array_comb['qm']:
+                        for heater in paras_array_comb['heater']:
+                            insulator_para.iloc[i] = paras_array['status'] + paras_array['pattern'] + Din + thick + Tc \
+                                                     + qm + heater + [location, nit, q]
+                            i += 1
         return insulator_para
 
     @property
@@ -124,20 +150,35 @@ class ReadData:
         phi = self.react_para["phi"]  # void of fraction
         rhoc = self.react_para["rhoc"]  # density of catalyst, kg/m3
         stage = self.react_para['stage']
-        L2 = self.react_para['L2']  # length, m
+        # L2 = self.react_para['L2']  # length, m
         Uc = self.react_para["Uc"]  # total heat transfer coefficient of the reactor, W/m2 K
         recycle = 1 if self.react_para['recycle'] == "on" else 0
 
         # reactor para frame
-        L1_array = self.data_array(self.data_array(self.react_para['L1']))
+        L_array, Dt_array = [], []
+        for n in range(stage):
+            L_array.append(self.data_array(self.react_para['L'][n]))
+            Dt_array.append(self.data_array(self.react_para['Dt'][n]))
 
-        Dt_array = self.data_array(self.react_para['Dt'])
-        reactor_num = len(Dt_array)*len(L1_array)
-        react_para = pd.DataFrame(index=np.arange(reactor_num), columns=list(self.react_para.keys()))
+        column = list(self.react_para.keys())
+        column.remove('L')
+        column.remove('Dt')
+        Dt_name = [f'Dt{n + 1}' for n in range(stage)]
+        L_name = [f'L{n + 1}' for n in range(stage)]
+        # generate the combination of reactor length, diameter
+        if stage > 0:
+            Ls = [[L1] for L1 in L_array[0]]
+            Dts = [[Dt1] for Dt1 in Dt_array[0]]
+        if stage > 1:
+            for i in range(1, stage):
+                Ls = [[*L, L_i] for L in Ls for L_i in L_array[i]]
+                Dts = [[*Dt, Dt_i] for Dt in Dts for Dt_i in Dt_array[i]]
+        reactor_num = len(Ls) * len(Dts)
+        react_para = pd.DataFrame(index=np.arange(reactor_num), columns=L_name + Dt_name + column)
         i = 0
-        for Dt in Dt_array:
-            for L1 in L1_array:
-                react_para.iloc[i] = [L1, Dt, nrt, rhoc, phi, recycle, stage, L2, Uc]
+        for L in Ls:
+            for Dt in Dts:
+                react_para.iloc[i] = L + Dt + [stage, nrt, rhoc, phi, recycle, Uc]
                 i += 1
         return react_para
 
