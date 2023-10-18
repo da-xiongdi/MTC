@@ -1,6 +1,6 @@
 {
   "condition": {
-    "T": [493],
+    "T": [490],
     "T_feed": [423],
     "P": [70],
     "fresh": "on",
@@ -9,7 +9,7 @@
     "H2": [2],
     "Sv": [90]
   },
-  "feed": "0.01604117\t0.04812351\t0.00032082\t0.00052082\t0.000",
+  "feed": "1E-5\t0.001217\t0\t0\t0.000517",
   "unit": {
     "T": "reactor inlet temperature, K",
     "T_feed": "feed gas temperature, K",

@@ -5,7 +5,7 @@ import pandas as pd
 from prop_calculator import VLE, mixture_property
 
 R = 8.314  # J/mol/K
-ks, vof = 0.2, 0.8  # 1.5 for 0.42 1 for 0.3 0.2 for 0.15
+ks, vof = 0.2, 0.8  # 0.2 1.5 for 0.42 1 for 0.3 0.2 for 0.15 # 1, 0.4 for CO exp
 
 
 class Reaction:
@@ -106,7 +106,8 @@ class Reaction:
             z = 1
         gas_property = mixture_property(T, pd.Series(F_dict / Ft, index=self.comp_list), z, rho_only=False)
         Re = self.ds * u * gas_property['rho'] / gas_property['vis'] / self.phi
-        drop_per_length = - (150 / Re + 1.75) * self.phi / (1-self.phi) ** 3 * (gas_property['rho'] * u ** 2 / self.ds)  # Pa/m
+        drop_per_length = - (150 / Re + 1.75) * self.phi / (1 - self.phi) ** 3 * (
+                gas_property['rho'] * u ** 2 / self.ds)  # Pa/m
         return drop_per_length
 
     def convection(self, T, P, F_dict):
@@ -133,6 +134,27 @@ class Reaction:
             Nu = 3.66
         h = Nu * mix_property['k'] / self.Dt  # W/m K
         return h
+
+    def rate_vi(self, T, Pi):
+        """
+        calculate the reaction rate
+        :param T: operating temperature, K
+        :param Pi: partial pressure of each component, bar
+        :return: reaction rate of each component for each and all reaction; mol/s/kg_cat
+        """
+
+        # convert the partial pressure from ndarray to pd.Series
+        Pi = pd.Series(Pi, index=self.comp_list)
+        K_H2O = 96808*np.exp(-51979/8.314/T)
+        k_r = 11101.2*np.exp(-117432/8.314/T)
+        Ke = 1/np.exp(-12.11+5319/T+1.012*np.log(T)+1.144*10**(-4*T))
+        react_rate = k_r*(Pi["CO2"]-Pi["CO"]*Pi["H2O"]/Ke/Pi["H2"])/(1+K_H2O*Pi["H2O"]/Pi["H2"])*1000
+
+        react_comp_rate = np.zeros((3, 5))
+        react_comp_rate[1] = react_rate * self.react_sto[1]
+        react_comp_rate[2] = react_rate * self.react_sto[1]
+        # print(react_comp_rate)
+        return react_comp_rate
 
     def rate_bu(self, T, Pi):
         """
@@ -264,9 +286,11 @@ class Reaction:
         if self.kn_model == 'GR':
             dF_react = self.rate_gr(T, fi)
         elif self.kn_model == 'BU':
-            dF_react = self.rate_bu(T, fi)
+            dF_react = self.rate_bu(T, fi)  # self.rate_vi(T, fi) #
         elif self.kn_model == 'SL':
             dF_react = self.rate_sl(T, fi)
+        elif self.kn_model == "VI":
+            dF_react = self.rate_vi(T, fi)
 
         # calculate the change of enthalpy due to reaction, kJ/(kg_cat s)
         dH_react = self.react_H(T, self.chem_data)

@@ -3,7 +3,7 @@
     "ref": "Graaf, 1986, Chemical Engineering Science; Bussche, 1996, Journal of Catalysis; Van-Dal, 2013, Journal of Cleaner Production",
     "reaction_list":{
         "1": "CO2 + 3 H2 <---> Methanol + H2O",
-        "2": "CO2 + H2 <---> CO + H20"
+        "2": "CO2 + H2 <---> CO + H2O"
     },
     "unit":{
         "kad": "bar^-1,J/mol",

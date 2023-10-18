@@ -1,6 +1,5 @@
 import os.path
 
-import matplotlib.pyplot as plt
 import scipy
 
 from prop_calculator import mixture_property, VLE
@@ -13,13 +12,13 @@ from reactor import Reaction
 
 
 class Simulation:
-    def __init__(self, reactors_para, chem_para, feed_para, insulator_para, eos):
+    def __init__(self, reactors_para, chem_para, feed_para, insulator_para, eos, drop):
 
         # basic info
         self.comp_list = ["CO2", "H2", "Methanol", "H2O", "CO"]
         self.R = 8.314
         self.eos = eos  # 0 for ideal 1 for SRK
-        self.drop = 1 # 1 for ergun 0 for zero drop
+        self.drop = drop  # 1 for ergun 0 for zero drop
 
         # reactor insulator feed para
         self.reactors_para = reactors_para  #
@@ -202,7 +201,7 @@ class Simulation:
         dH_diff = sim_res[-2, -1]
         dH_heater = sim_res[-1, -1]
         yield_CH3OH = dF_diff_ch3oh if 1 in self.status else dF_react_ch3oh
-        eff = dH_heater/1000 / (yield_CH3OH*32) # kJ/g CH3OH
+        eff = dH_heater / 1000 / (yield_CH3OH * 32)  # kJ/g CH3OH
         res = pd.Series([r, s_react, yield_CH3OH, dP, To_r,
                          Tin_c, dH_react, dH_diff, dH_heater, eff, sp_ch3oh, sp_h2o, N_CH3OH_H2O],
                         index=['conversion', 'select', 'y_CH3OH', 'dP', 'To_r', "Tin_c",
@@ -257,7 +256,17 @@ class Simulation:
         [T_in, P_in, F_in] = feed.loc[['T0', 'P0', 'F0']].values
         [L, Dt, nrt, phi, rhoc] = reactor.loc[['L', 'Dt', 'nrt', 'phi', 'rhoc']].values
         [Din, thick, Tc_in, qm, heater] = insulator.loc[['Din', 'Thick', 'Tc', 'qm', 'heater']].values
+        Dt = Din if self.location == 0 else Dt
         [status, pattern, nit, location] = insulator.loc[['status', 'pattern', 'nit', 'location']].values
+
+        if status == 1:
+            q_h_guess = int((T_in - Tc_in) / thick * 0.2 * np.pi * Din * heater)
+            L = round(min(1400 / q_h_guess, L), 2)
+            print(Din, thick, heater, L)
+            self.reactors_para['L2'] = L
+        else:
+            q_h_guess = 0
+
         Do = Din + thick * 2
         if diff_in is None:
             q_react_in, q_diff_in, q_heater_in = 0, 0, 0
@@ -269,6 +278,8 @@ class Simulation:
         F_feed_pd = pd.Series(self.F0, index=self.comp_list)
         property_feed = mixture_property(self.T_feed, xi_gas=F_feed_pd / np.sum(self.F0), Pt=P_in)
 
+        # self.heater = max(q_h_guess, heater)
+
         def model(z, y):
             # y= [F_CO2, F_H2, F_CH3OH, F_H2O, F_CO
             # react: F_CO2, F_H2, F_CH3OH, F_H2O, F_CO,
@@ -278,13 +289,14 @@ class Simulation:
             Tr, Tc, P = y[-6], y[-5], y[-4]
             # simulation of reactor
             res_react = react_sim.balance(Tr, P, F)
-            dP_dz = 0 if self.drop == 0 else react_sim.ergun(Tr, P, F) * 1e-5 # bar/m
+            dP_dz = 0 if self.drop == 0 else react_sim.ergun(Tr, P, F) * 1e-5  # bar/m
             # convert reaction rate per length to per kg catalyst
             dl2dw = np.pi * ((Dt ** 2) / 4) * rhoc * phi
             if status == 1 and z > 0:
                 # the module insulator is on
                 # volume fraction of catalyst
                 r_v_ins_v_react = Do ** 2 * nit / Dt ** 2 / nrt if location == 1 else 0
+                # r_v_ins_v_react = 0.08 for CO exp 1999
                 coe_Tc = -1 if location == 1 else 1
                 res_diff = insula_sim.flux(Tr, P, F, Tc)  # simulation of insulator
                 dTc_dz = -pattern * (coe_Tc * res_diff['hflux'] * nit) / qm / 76
@@ -299,14 +311,16 @@ class Simulation:
             dF_react_dz = res_react['mflux'] * dl2dw * (1 - r_v_ins_v_react) * self.nrt
             dF_diff_dz = res_diff["mflux"] * nit
             dF_dz = dF_react_dz + dF_diff_dz
+
+            q_heater = q_h_guess  # heater#round(max(q_h_guess, heater)) #heater # 0 if z < 0.1*0.08 else for CO exp
             dTr_dz = res_react["Tvar"] * dl2dw * (1 - r_v_ins_v_react) * nrt + res_diff["Tvar"] * self.nit + \
-                     cooler + heater / heat_cap  # res_react['tc']
+                     cooler + q_heater / heat_cap  # res_react['tc']
             dq_rea_dz = res_react["hflux"] * dl2dw * (1 - r_v_ins_v_react) * self.nrt  # W/m
             dq_dif_dz = res_diff['hflux'] * self.nit + cooler * heat_cap  # res_react['tc']  # W/m
 
             # print(Tr, res_react["Tvar"] * dl2dw * (1 - r_v_ins_v_react) * nrt, res_diff["Tvar"] * self.nit)
             res_dz = np.hstack((dF_dz, dF_react_dz, dF_diff_dz,
-                                np.array([dTr_dz, dTc_dz, dP_dz, dq_rea_dz, dq_dif_dz, heater])))
+                                np.array([dTr_dz, dTc_dz, dP_dz, dq_rea_dz, dq_dif_dz, q_heater])))
             return res_dz
 
         z_span = [0, L]
@@ -447,7 +461,9 @@ class Simulation:
             with pd.ExcelWriter(res_path, engine='openpyxl', mode='a', if_sheet_exists="overlay") as writer:
                 try:
                     res_saved = pd.read_excel(res_path, sheet_name=loop)
-                    res_save = res_saved.append(res_save, ignore_index=True)
+                    res_save = pd.concat([res_saved, res_save], ignore_index=True)
+                    # print(res_save)
+                    # res_save = res_saved.append(res_save, ignore_index=True)
                     res_save.to_excel(writer, index=False, header=True, sheet_name=loop)
                 except ValueError:
                     res_save.to_excel(writer, index=False, header=True, sheet_name=loop)
@@ -460,7 +476,7 @@ class Simulation:
                                                             ['Tr', 'Tc', 'dP', 'q_react', 'q_diff', 'q_heater'])
             sim_path = 'result/sim_profile_%s_%s_%s_%s_%s_%s_%s_%s_%s_%s_%s.xlsx' \
                        % (self.stage, ks, kn_model, self.status, self.recycle, self.Dt.values, self.L.values,
-                          self.heater,self.T0, self.P0, self.Tc)
+                          self.heater, self.T0, self.P0, self.Tc)
             sheet_name = 'U_%s_eos_%s_drop_%s' % (self.Uc, self.eos, self.drop)
             try:
                 with pd.ExcelWriter(sim_path, engine='openpyxl', mode='a', if_sheet_exists='new') as writer:

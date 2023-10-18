@@ -81,12 +81,15 @@ class EquilibriumCalculator:
             # generate VLE calculator
             fi_cal = VLE(self.temperature, self.hf_params.index.tolist())
             # evaluate pressure of dew point
-            # guess the vapor phase
-            mol_guess = mol_frac[["Methanol", "H2O"]] / np.sum(mol_frac.values[2:4])
-            P_dew_cal = VLE(self.temperature, ["Methanol", "H2O"])
-            # print(mol_guess)
-            P_dew_cond = P_dew_cal.dew_p(mol_guess)['P']
-            P_dew = P_dew_cond / np.sum(mol_frac.values[2:4]) * np.sum(mol_frac.values)
+            if np.sum(mol_frac.values[2:4]) > 1e-5:
+                # guess the vapor phase
+                mol_guess = mol_frac[["Methanol", "H2O"]] / np.sum(mol_frac.values[2:4])
+                P_dew_cal = VLE(self.temperature, ["Methanol", "H2O"])
+                # print(mol_guess)
+                P_dew_cond = P_dew_cal.dew_p(mol_guess)['P']
+                P_dew = P_dew_cond / np.sum(mol_frac.values[2:4]) * np.sum(mol_frac.values)
+            else:
+                P_dew = 1000
             # print(P_dew)
             # print(mol_frac)
             if self.pressure < P_dew:
@@ -125,17 +128,17 @@ class EquilibriumCalculator:
         if x0 is None:
             x0 = feed.copy()
             r_guess, s_guess = 0.5, 0.5
-            x0[2:] = x0[0] * np.array([r_guess * s_guess,
-                                       r_guess,
-                                       r_guess * (1 - s_guess)])
-            x0[:2] = np.array([(1 - r_guess) * x0[0],
-                               x0[1] - x0[0] * (2 * r_guess * s_guess + r_guess)])
+            x0 = np.array([(1 - r_guess) * x0[0],
+                           x0[1] - x0[0] * (2 * r_guess * s_guess + r_guess),
+                           r_guess * s_guess * x0[0],
+                           r_guess * x0[0],
+                           r_guess * (1 - s_guess) * x0[0]])
+
             # x0 = feed.copy()
             # x0[2:] = x0[0] * np.array([0.2, 0.3, 0.1])
             # x0 = x0 * np.array([0.7, 23 / 30, 1, 1, 1])
         else:
             x0 = x0
-
         # Define bounds for the variables (product fractions should be between 0 and 1)
         # bounds = [(0, 1) for _ in range(len(x0))]
         # Combine equality and inequality constraints
@@ -206,14 +209,14 @@ def series_reactor(feed, temperature, pressure, r_target):
         reactor_feed[2], reactor_feed[3] = 0, 0
 
         FR = [product.copy(), temperature, pressure]
-        F1 = [reactor_feed, temperature, np.sum(reactor_feed) / np.sum(product) * pressure]
+        F1 = [reactor_feed, temperature, pressure]
         F2_comp = np.array([0, 0, product[2], product[3], 0])
-        F2 = [F2_comp, temperature, np.sum(F2_comp) / np.sum(product) * pressure]
-        F3 = [reactor_feed, temperature, pressure]
-        F4 = [F2_comp, 298.15, 1.0]
+        F2 = [F2_comp, temperature, pressure]
+        F3 = [np.array([0, 0, product[2], 0, 0]), temperature, pressure]
+        F4 = [np.array([0, 0, 0, product[3], 0]), temperature, pressure]
 
         Ws = -Work_min([FR, F1, F2])  # minus means work output
-        Wc = -Work_min([F1, F3])
+        Wc = -Work_min([F2, F3, F4])
         We = -Work_min([F2, F4])
         sep_work.append([Ws, Wc, We])
         dHrs.append([dHr])
@@ -269,7 +272,7 @@ if __name__ == "__main__":
     Hfs = pd.DataFrame(Hfs, index=["CO2", "H2", "Methanol", "H2O", "CO"], columns=Ts)
 
     # # Define the feed and product compositions
-    feed_comp = np.array([0.00825, 0.02475, 0, 0, 0])  # CO2 H2 CH3OH H2O CO
+    feed_comp = np.array([1, 3, 0, 0, 0])  # CO2 H2 CH3OH H2O CO
     product_comp = np.array([0, 0, 1, 1, 0])  # CO2 H2 CH3OH H2O CO
 
     element = np.array([[1, 0, 1, 0, 1],

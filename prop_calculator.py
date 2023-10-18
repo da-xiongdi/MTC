@@ -5,7 +5,7 @@ import pandas as pd
 from CoolProp.CoolProp import PropsSI
 import scipy.optimize as opt
 
-# warnings.filterwarnings('ignore')
+warnings.filterwarnings('ignore')
 # T_gas = 200  # 310.93  # K
 # P_gas = 30  # 6.3  # bar
 R = 8.314
@@ -91,6 +91,11 @@ def mixture_property(T, xi_gas, Pt, z=1, rho_only=False):
 
 
 class VLE:
+
+    """
+    calculate the VLE properties including:
+    fugacity, fugacity coe, dew point of mixture, flash calculation
+    """
     def __init__(self, T, comp):
         """
         Initialize the VLE object.
@@ -143,6 +148,11 @@ class VLE:
                           [0.0148, 0, 0, -0.0789, 0],
                           [0.0737, 0, -0.0789, 0, 0],
                           [0, 0.0804, 0, 0, 0]])
+            # k = np.array([[0, -0.0007, 0.1, 0.3, 0.1164],
+            #               [0.1164, 0, -0.125, -0.745, -0.0007],
+            #               [0.1, -0.125, 0, -0.075, -0.37],
+            #               [0.3, -0.745, -0.075, 0, -0.474],
+            #               [0.1164, -0.0007, -0.37, -0.474, 0]])
         else:
             k = np.zeros((self.num, self.num))
         return k
@@ -212,10 +222,11 @@ class VLE:
         # the mix para in EoS for vapor phase
         a_mix, b_mix = self.para_mix(comp, a, b, k_mix)
         beta_mix = b_mix * P / (R * 10) / self.T
+
         q_mix = a_mix / b_mix / (R * 10) / self.T
-        Z_guess = 1e-5 if phase == 1 else 0.8
+        Z_guess = 1e-3 if phase == 1 else 0.8
         Z_mix = opt.fsolve(self.func_z(beta_mix, q_mix, phase), [Z_guess])[0]
-        Z_mix = 1e-5 if Z_mix < 0 else Z_mix
+        Z_mix = 1e-3 if Z_mix < 0 else Z_mix
         I_mix = np.log((Z_mix + beta_mix) / Z_mix)
         ln_phi = np.empty(num)
         for j in range(num):
@@ -227,7 +238,6 @@ class VLE:
             q_ba[j] = q_mix * (1 + a_ba[j] / a_mix - b[j] / b_mix)
             ln_phi[j] = b[j] * (Z_mix - 1) / b_mix - np.log(Z_mix - beta_mix) - q_ba[j] * I_mix
         phi = np.exp(ln_phi)
-        # print(phi, Z_mix)
         return phi, Z_mix
 
     def dew_p(self, y, x_guess=None):
@@ -245,10 +255,11 @@ class VLE:
         # find the equilibrium pressure and mol fraction of liquid phase
         comp.iloc[1] = x_guess if x_guess is not None else self.Psat / np.sum(self.Psat)  # y.values
         P_min = np.min(self.Psat) if len(y) == 2 else 48  # when only CH3OH\H2O is considered, P_min decided by Psat
-        for P in np.arange(P_min, 70, 0.05):
+        step = 0.01 if (len(y) == 2 and self.T < 373) else 1
+        for P in np.arange(P_min, 200, step):
             delta_K_sum = 1e5
             K_sum_K_pre = 10
-            while delta_K_sum > 0.01:
+            while delta_K_sum > 0.05:
                 phi = np.empty((2, num))
                 for i in range(2):
                     # cycle for each phase
@@ -259,6 +270,7 @@ class VLE:
                 comp.iloc[1] = comp.iloc[0] / K / K_sum_cal
                 delta_K_sum = abs(K_sum_cal - K_sum_K_pre)
                 K_sum_K_pre = K_sum_cal
+
             if abs(K_sum_cal - 1) < 0.01:
                 res = {'P': P, "K": K, "phi": phi, "comp": comp}
                 return res
@@ -271,16 +283,18 @@ class VLE:
         Perform flash calculations to find the phase equilibrium composition at a specified pressure.
 
         :param P: Pressure
-        :param mix: Molar fraction of mix liquid (pandas Series)
+        :param mix: Molar fraction of mix fluid (pandas Series)
         :return: Phase equilibrium composition (DataFrame)
         """
         comp = pd.DataFrame(index=['V', 'L1'], columns=mix.index)
         fi = np.zeros((2, self.num))
         fi[1] = 1
         K = np.exp(5.37 * (1 + self.Omega) * (1 - 1 / (self.T / self.Tc))) / (P / self.Pc)
-        m = 0
-        while np.sum(abs(fi[0] - fi[1])) > 1e-5:
-            vol = opt.fsolve(self.func_l(mix.values, K), 1e-3)[0]
+        m, dev = 0, 1
+        tol, max_iter, vol_guess = 1e-3, 50, [1e-3, 5e-3, 1e-2, 0.05, 0.1]
+        i = 0
+        while dev > tol:
+            vol = opt.fsolve(self.func_l(mix.values, K), vol_guess[i])[0]
             comp.iloc[1] = mix.values / (vol + (1 - vol) * K)
             comp.iloc[0] = K * comp.iloc[1]
             phi, _ = self.phi(comp.iloc[0], P, 0)
@@ -288,8 +302,96 @@ class VLE:
             phi, _ = self.phi(comp.iloc[1], P, 1)
             fi[1] = phi * P * comp.iloc[1]
             K = fi[1] * K / fi[0]
+            dev = np.max(abs(fi[0] - fi[1]) / fi[0])
+            if m % max_iter == 0 and m != 0:
+                print(abs(fi[0] - fi[1]) / fi[0])
+                print("reach max iteration")
+                i += 1
+                # return comp, phi
             m += 1
-        return comp
+        return comp, phi
 
+
+class Thermo:
+    """
+    calculate thermo-physical properties including
+    formation of enthalpy, formation of Gibbs energy
+    at given comps, temperature
+    """
+    def __init__(self, hf_para=None, gf_para=None):
+
+        # fit para for calculate enthalpy of formation, and Gibbs energy of formation
+        self.gf_paras = self.__Gf_para() if gf_para is None else gf_para
+        self.hf_paras = self.__Hf_para() if hf_para is None else hf_para
+        self.gf_fit, self.hf_fit = self.fit_para
+
+    @staticmethod
+    def __Gf_para():
+        # # Parameters for calculating gibbs energy of formation
+        # # CO2 H2 CH3OH H2O CO
+        Ts = np.arange(300, 1100, 100)
+        Gfs = np.array([[-394.379, -394.656, -394.914, -395.152, -395.367, -395.558, -395.724, -395.865],
+                        [0, 0, 0, 0, 0, 0, 0, 0],
+                        [-162.057, -148.509, -134.109, -119.125, -103.737, -88.063, -72.188, -56.170],
+                        [-228.5, -223.9, -219.05, -214.008, -208.814, -203.501, -198.091, -192.603],
+                        [-137.333, -146.341, -155.412, -164.480, -173.513, -182.494, -191.417, -200.281]])
+
+        Gfs = pd.DataFrame(Gfs, index=["CO2", "H2", "Methanol", "H2O", "CO"], columns=Ts)
+        return Gfs
+
+    @staticmethod
+    def __Hf_para():
+        # # Parameters for calculating enthalpy of formation
+        # # CO2 H2 CH3OH H2O CO
+        Ts = np.arange(300, 1100, 100)
+
+        Hfs = np.array([[-393.511, -393.586, -393.672, -393.791, -393.946, -394.133, -394.343, -394.568],
+                        [0, 0, 0, 0, 0, 0, 0, 0],
+                        [-201.068, -204.622, -207.750, -210.387, -212.570, -214.350, -215.782, -216.916],
+                        [-241.844, -242.845, -243.822, -244.751, -245.620, -246.424, -247.158, -247.820],
+                        [-110.519, -110.121, -110.027, -110.157, -110.453, -110.870, -111.378, -111.952]])
+        Hfs = pd.DataFrame(Hfs, index=["CO2", "H2", "Methanol", "H2O", "CO"], columns=Ts)
+        return Hfs
+
+    @property
+    def fit_para(self):
+        """
+        fit para for calculating the energy (Gibbs energy or enthalpy) of formation for a species
+        """
+        gf_fit_paras = {}
+        hf_fit_paras = {}
+        for comp in self.gf_paras.index:
+            gf_fit_paras[comp] = np.polyfit(self.gf_paras.loc[comp].index, self.gf_paras.loc[comp].values, 2)
+            hf_fit_paras[comp] = np.polyfit(self.hf_paras.loc[comp].index, self.hf_paras.loc[comp].values, 2)
+        return gf_fit_paras, hf_fit_paras
+
+    def H(self, T, comps):
+        """
+        calculate formation of enthalpy at T for given comp
+        :param T: K
+        :param comps: list
+        :return: molar enthalpy (pd.Series)
+        """
+        H = pd.Series(index=comps)
+        for comp in comps:
+            H.loc[comp] = np.polyval(self.hf_fit[comp], T)
+        return H
+
+    def G(self, T, pi):
+        """
+        calculate formation of gibbs energy at T for given partial pressure
+        :param T: K
+        :param pi: partial pressure (pd.Series)
+        :return: molar gibbs energy (pd.Series)
+        """
+        G = pd.Series(index=pi.index)
+        for comp in pi.index:
+            if pi[comp] < 1e-15:
+                G.loc[comp] = 0
+            else:
+                G.loc[comp] = np.polyval(self.gf_fit[comp], T) + 8.314 * T * np.log(pi[comp] / 1) / 1000
+        return G
 
 # mixture_property(490, pd.Series([0.25, 0.75], index=['CO2', 'hydrogen']), 70)
+# tt = VLE(293, ["H2O"])
+# print(tt.phi(pd.Series([1], index=["H2O"]), 1, 1))
