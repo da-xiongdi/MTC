@@ -91,11 +91,11 @@ def mixture_property(T, xi_gas, Pt, z=1, rho_only=False):
 
 
 class VLE:
-
     """
     calculate the VLE properties including:
     fugacity, fugacity coe, dew point of mixture, flash calculation
     """
+
     def __init__(self, T, comp):
         """
         Initialize the VLE object.
@@ -209,7 +209,7 @@ class VLE:
         :param comp: Molar fraction of fluid (pandas Series)
         :param P: Total pressure, bar
         :param phase: Phase (0 for vapor, 1 for liquid)
-        :return: Fugacity coefficients (numpy array)
+        :return: Fugacity coefficients (numpy array), compression factor of mixture
         """
         # extract the fluid parameters
         index_list = comp.index.tolist()
@@ -318,6 +318,7 @@ class Thermo:
     formation of enthalpy, formation of Gibbs energy
     at given comps, temperature
     """
+
     def __init__(self, hf_para=None, gf_para=None):
 
         # fit para for calculate enthalpy of formation, and Gibbs energy of formation
@@ -365,7 +366,16 @@ class Thermo:
             hf_fit_paras[comp] = np.polyfit(self.hf_paras.loc[comp].index, self.hf_paras.loc[comp].values, 2)
         return gf_fit_paras, hf_fit_paras
 
-    def H(self, T, comps):
+    def sat(self, pi):
+        """
+        :param pi: partial pressure (pd.Series)
+        :return:
+        """
+        pc = pd.Series(index=pi.index)
+        for comp in pi.index:
+            pc = PropsSI('Pcrit', comp) * 1e-5
+
+    def H1(self, T, comps):
         """
         calculate formation of enthalpy at T for given comp
         :param T: K
@@ -375,6 +385,27 @@ class Thermo:
         H = pd.Series(index=comps)
         for comp in comps:
             H.loc[comp] = np.polyval(self.hf_fit[comp], T)
+        return H
+
+    def H(self, T, pi):
+        """
+        calculate formation of enthalpy at T for given comp
+        :param T: K
+        :param pi: partial pressure (pd.Series)
+        :return: molar enthalpy (pd.Series)
+        """
+        H = pd.Series(index=pi.index)
+        Tc = pd.Series(index=pi.index)  # critical temperature
+        ps = pd.Series(index=pi.index)  # saturated pressure
+        for comp in pi.index:
+            Tc[comp] = PropsSI('Pcrit', comp)
+            ps[comp] = PropsSI('P', 'T', T, 'Q', 1, comp) * 1e-5 if T < Tc[comp] else np.nan
+            if not np.isnan(ps[comp]) and pi[comp] > ps[comp]:
+                # liquid phase
+                h_vl = PropsSI('H', 'T', T, 'Q', 1, comp) - PropsSI('H', 'T', T, 'Q', 0, comp)
+                # v_ps, v_pi =
+            else:
+                H.loc[comp] = np.polyval(self.hf_fit[comp], T)
         return H
 
     def G(self, T, pi):

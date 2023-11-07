@@ -260,10 +260,10 @@ class Simulation:
         [status, pattern, nit, location] = insulator.loc[['status', 'pattern', 'nit', 'location']].values
 
         if status == 1:
-            q_h_guess = int((T_in - Tc_in) / thick * 0.2 * np.pi * Din * heater)
-            L = round(min(1400 / q_h_guess, L), 2)
-            print(Din, thick, heater, L)
-            self.reactors_para['L2'] = L
+            q_h_guess = round((T_in - Tc_in) / thick * 0.2 * np.pi * Din * heater,2)
+            # L = round(min(1400 / q_h_guess, L), 2)
+            print(Din, thick, heater, L, q_h_guess)
+            # self.reactors_para['L2'] = L
         else:
             q_h_guess = 0
 
