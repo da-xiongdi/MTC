@@ -375,7 +375,7 @@ class Thermo:
         for comp in pi.index:
             pc = PropsSI('Pcrit', comp) * 1e-5
 
-    def H1(self, T, comps):
+    def H(self, T, comps):
         """
         calculate formation of enthalpy at T for given comp
         :param T: K
@@ -387,7 +387,7 @@ class Thermo:
             H.loc[comp] = np.polyval(self.hf_fit[comp], T)
         return H
 
-    def H(self, T, pi):
+    def H1(self, T, pi):
         """
         calculate formation of enthalpy at T for given comp
         :param T: K
