@@ -2,7 +2,7 @@ import numpy as np
 from CoolProp.CoolProp import PropsSI
 import pandas as pd
 
-from prop_calculator import VLE, mixture_property
+from prop_calculator import VLE, mixture_property, VLEThermo
 
 R = 8.314  # J/mol/K
 ks, vof = 0.2, 0.8  # 0.2 1.5 for 0.42 1 for 0.3 0.2 for 0.15 # 1, 0.4 for CO exp
@@ -275,8 +275,10 @@ class Reaction:
         # calculate the correction to volumetric flow rate (m3/s)
         if self.eos == 1:
             # fugacity coe, compression factor
-            vle_cal = VLE(T, self.comp_list)
-            phi, _ = vle_cal.phi(comp=pd.Series(xi, index=self.comp_list), P=P, phase=0)
+            # vle_cal = VLE(T, self.comp_list)
+            # phi, _ = vle_cal.phi(comp=pd.Series(xi, index=self.comp_list), P=P, phase=0)
+            vle_cal = VLEThermo(self.comp_list)
+            phi = np.array(vle_cal.phi(T=T,P=P,x=xi))
         else:
             phi = 1
         v = self.v0 * (self.P0 / P) * (T / self.T0) * (Ft / self.Ft0)

@@ -22,9 +22,10 @@ for i in range(feed_data.shape[0]):
             try:
                 sim = Simulation(reactor_data.iloc[j], chem_data, feed_data.iloc[i],
                                  insulator_data.iloc[k], eos=1, drop=0)
-                sim.sim(save_profile=1, loop='indirect', rtol=0.01)
+                sim.sim(save_profile=0, loop='indirect', rtol=0.01, r_target=0.95)
                 del sim
-            except ValueError:
+            except ValueError as ve:
+                print(f'{ve}')
                 pass
             n += 1
 

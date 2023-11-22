@@ -140,7 +140,7 @@ class ReadData:
                     for qm in paras_array_comb['qm']:
                         for heater in paras_array_comb['heater']:
                             insulator_para.iloc[i] = paras_array['status'] + paras_array['pattern'] + Din + thick + Tc \
-                                                     + qm + heater + [location, nit, q]
+                                                     + qm + [round(k,2) for k in heater] + [location, nit, q]
                             i += 1
         return insulator_para
 

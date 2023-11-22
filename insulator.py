@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import scipy
 from CoolProp.CoolProp import PropsSI
-from prop_calculator import VLE, mixture_property
+from prop_calculator import VLE, mixture_property, VLEThermo
 
 R = 8.314
 
@@ -15,7 +15,7 @@ class Insulation:
 
         # insulator parameters
         self.nit = n  # tube number of the insulator
-        self.location = location
+        self.location = location  # 0 for hot in cold out; 1 for cold in hot out
         self.Do, self.Din = Do, Din
         self.thick = (self.Do - self.Din) / 2
         self.comp_list = ["CO2", "H2", "Methanol", "H2O", "CO"]
@@ -120,7 +120,7 @@ class Insulation:
             def model(z, y):
                 [x, N, T, dTdz] = y
                 # D_dm = (1 - x) / (x_main["CO2"] / D_1 + x_main["H2"] / D_2)
-                D_dm = (1 - x) / (x_main["CO"] / D_1 + x_main["H2"] / D_2)
+                D_dm = (1 - x) / (x_main["CO2"] / D_1 + x_main["H2"] / D_2)
                 dxd_dz = -(N - x * N) / (D_dm * (P / R / T))
 
                 dNd_dz = -N / z
@@ -142,7 +142,7 @@ class Insulation:
             res = scipy.integrate.solve_bvp(model, bound, xini, yini, tol=1e-8, max_nodes=5000)
             xsol = np.linspace(xa, xb, 200)
             ysol = res.sol(xsol)
-            # [xc, xd, Nd, T, dTdz]
+            # [xc, Nc, xd, Nd, T, dTdz]
             ysol = np.insert(ysol, stat_spec, diff_prop[stat_spec, 0], axis=0)
             ysol = np.insert(ysol, stat_spec + 2, 0, axis=0)
 
@@ -161,15 +161,14 @@ class Insulation:
         # calculate the partial pressure
 
         Ft = np.sum(F_dict)
-
         # insulator parameter
         radium = [self.Din / 2, self.Do / 2]
         # calculate the molar fraction of the mix
         xi_h = pd.Series(F_dict / Ft, index=self.comp_list)
         Pi_h = xi_h * P
-        P_sat_CH3OH = PropsSI('P', 'T', Tc, 'Q', 1, "Methanol")*1e-5
-        P_sat_H2O = PropsSI('P', 'T', Tc, 'Q', 1, "H2O")*1e-5
-        P_sat = [P_sat_CH3OH, P_sat_H2O] # [0,0]#
+        P_sat_CH3OH = PropsSI('P', 'T', Tc, 'Q', 1, "Methanol") * 1e-5
+        P_sat_H2O = PropsSI('P', 'T', Tc, 'Q', 1, "H2O") * 1e-5
+        P_sat = [P_sat_CH3OH, P_sat_H2O]  # [0,0]#
 
         if xi_h["Methanol"] < 3e-3 and xi_h['H2O'] < 1e-3:
             # no reacted gas, end the calculation
@@ -181,7 +180,6 @@ class Insulation:
 
         elif (xi_h["Methanol"] > 3e-3 and xi_h['H2O'] < 1e-3) or (xi_h["Methanol"] < 3e-3 and xi_h['H2O'] > 1e-3):
             # only one condensable spec is formed
-            # print("y")
             [diff_spec, stat_spec] = [0, 1] if xi_h["Methanol"] >= 3e-3 else [1, 0]
             # print(diff_spec)
             # print(Pi_h[diff_spec + 2], P_sat[diff_spec],diff_spec)
@@ -200,9 +198,9 @@ class Insulation:
             else:
                 Pi_h_other_sum = P - Pi_h[diff_spec]
                 Pi_c_other_sum = P - P_sat[diff_spec]
-                Pi_c = Pi_h * (Pi_c_other_sum/Pi_h_other_sum)
-                Pi_c[diff_spec+2] = P_sat[diff_spec]
-                xi_c = Pi_c/np.sum(Pi_c)
+                Pi_c = Pi_h * (Pi_c_other_sum / Pi_h_other_sum)
+                Pi_c[diff_spec + 2] = P_sat[diff_spec]
+                xi_c = Pi_c / np.sum(Pi_c)
 
                 Tw = Th - 0.1
                 # gas properties inside the insulator
@@ -213,6 +211,7 @@ class Insulation:
                 # calculate the diffusional flux inside the insulator
                 cold_cond = [Tc, xi_c["Methanol"], xi_c["H2O"], radium[1 - self.location]]
                 hot_cond = [Th, xi_h["Methanol"], xi_h["H2O"], radium[self.location]]
+
                 cond_list = [hot_cond, cold_cond]
                 cal_property = [mix_pro_ave["cp_Methanol"], mix_pro_ave["cp_H2O"], k_e]
                 # [xc, xd, Nc,Nd, T, dTdz]
@@ -230,8 +229,11 @@ class Insulation:
 
         else:
             # vle calculation, determine the dew pressure
-            vle_c = VLE(Tc, comp=self.comp_list)
-            P_dew = (1 / (xi_h["Methanol"] / P_sat_CH3OH + xi_h['H2O'] / P_sat_H2O))
+            # vle_c = VLE(Tc, comp=self.comp_list)
+            # P_dew = (1 / (xi_h["Methanol"] / P_sat_CH3OH + xi_h['H2O'] / P_sat_H2O))
+
+            vle_c = VLEThermo(comp=self.comp_list)
+            P_dew = vle_c.p_dew(Tc, xi_h.values)
 
             if P < P_dew:
                 qcv_delta = 1e5
@@ -256,8 +258,10 @@ class Insulation:
             else:
                 # condensation occurs
                 # calculate the composition of vapor and liquid phase
-                flash_comp,_ = vle_c.flash(P=P, mix=xi_h)
-                xi_c = flash_comp.loc['V']
+
+                # flash_comp, _ = vle_c.flash(P=P, mix=xi_h)
+                # xi_c = flash_comp.loc['V']
+                xi_c = pd.Series(vle_c.flash(T=Tc, P=P, x=xi_h.values), index=self.comp_list)
 
                 qcv_delta = 1e5
                 Tw = Th - 0.1
@@ -273,7 +277,8 @@ class Insulation:
                     cond_list = [hot_cond, cold_cond]
                     cal_property = [mix_pro_ave["cp_Methanol"], mix_pro_ave["cp_H2O"], k_e]
                     # [xc, xd, Nc,Nd, T, dTdz]
-                    ode_res = self.ode_multi(xi_h, cond_list[self.location], cond_list[self.location - 1], P, cal_property)
+                    ode_res = self.ode_multi(xi_h, cond_list[self.location], cond_list[self.location - 1], P,
+                                             cal_property)
 
                     # mass flux inside the insulator, mol/(s m)
                     na_H20 = ode_res[3][-self.location] * radium[-self.location] * 2 * np.pi * vof
@@ -290,11 +295,11 @@ class Insulation:
                 property_h = mixture_property(Th, xi_h, P)
                 dT = qcv_cond / Ft / property_h["cp_m"]  # k/m
                 dev = gap_min / xi_h["H2O"]
-            # [xc, xd, Nc, Nd, T, dTdz]
+            # [xc, Nc, xd, Nd, T, dTdz]
             # xsol = np.linspace(0.02, 0.03, 200)
-            # plt.plot(xsol, ode_res[1])
-            # plt.show()
-            # plt.plot(xsol, ode_res[3])
+            # plt.plot(xsol, ode_res[0], label='H2O')
+            # plt.plot(xsol, ode_res[2], label='CH3OH')
+            # plt.legend()
             # plt.show()
 
             if dev > 0.1: print([na_CH3OH, na_H20], dev, 'dev too big')

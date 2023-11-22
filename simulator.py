@@ -1,4 +1,5 @@
 import os.path
+import warnings
 
 import scipy
 
@@ -10,6 +11,10 @@ from CoolProp.CoolProp import PropsSI
 from datetime import datetime
 from reactor import Reaction
 
+
+# from gibbs import Gibbs
+RED = '\033[91m'
+ENDC = '\033[0m'
 
 class Simulation:
     def __init__(self, reactors_para, chem_para, feed_para, insulator_para, eos, drop):
@@ -260,7 +265,7 @@ class Simulation:
         [status, pattern, nit, location] = insulator.loc[['status', 'pattern', 'nit', 'location']].values
 
         if status == 1:
-            q_h_guess = round((T_in - Tc_in) / thick * 0.2 * np.pi * Din * heater,2)
+            q_h_guess = round((T_in - Tc_in) / thick * 0.2 * np.pi * Din * heater, 2)
             # L = round(min(1400 / q_h_guess, L), 2)
             print(Din, thick, heater, L, q_h_guess)
             # self.reactors_para['L2'] = L
@@ -339,17 +344,16 @@ class Simulation:
         for n in range(self.stage):
             insulator_para = self.insulator.iloc[n]
             reactor_para = self.reactor_para.iloc[n]
-
             res[f'{n}'] = self.one_pass(reactor_para, insulator_para, feed_para, diff_para)
-            F_out, Tr_out, Tc_out = res[f'{n}'][1:6, -1], res[f'{n}'][-6, -1], res[f'{n}'][-5, -1]
-            P_out = res[f'{n}'][-4, -1]
-            diff_para = res[f'{n}'][-3:, -1]
+            F_out, Tr_out, Tc_out = res[f'{n}'][1:6, -1].copy(), res[f'{n}'][-6, -1].copy(), res[f'{n}'][-5, -1].copy()
+            P_out = res[f'{n}'][-4, -1].copy()
+            diff_para = res[f'{n}'][-3:, -1].copy()
             feed_para = pd.Series([Tr_out, P_out, F_out], index=['T0', 'P0', 'F0'])
         if self.stage >= 1:
             res_profile = res['0']
             custom_array = np.linspace(0, self.L[0], 1000).tolist()
             for i in np.arange(1, self.stage):
-                res_profile = np.hstack((res_profile, res[f'{n}']))
+                res_profile = np.hstack((res_profile, res[f'{i}']))
                 custom_array += list(np.linspace(0, self.L[i], 1000) + sum(self.L[:i]))
             res_profile[0] = custom_array
 
@@ -428,7 +432,46 @@ class Simulation:
 
         return res1, F_re_cal1
 
-    def sim(self, save_profile=0, loop='direct', rtol=0.05):
+    def to_r(self, r_target):
+        if self.stage > 2:
+            raise ValueError('stage > 2 is not supported with given conversion')
+        # guess a length
+        L0, r_sim = 1, 0
+
+        while r_sim < r_target or r_sim > 1:
+            self.reactors_para['L2'] = self.L[1] = self.reactor_para.iloc[1]['L'] = round(L0, 2)
+            res_profile = self.multi_reactor()
+            r_metric = self.reactor_metric(res_profile)
+            r_sim = r_metric['conversion']
+            print(r_sim)
+            # detect the improper configuration
+            if L0 > 15:
+                # print(f"ValueError: 'too low r too long reactor!':{r_sim:.2f}_{L0:.2f}")
+                raise ValueError(f"{RED}ValueError: 'too low r too long reactor!':{r_sim:.2f}_{L0:.2f}{ENDC}")
+            if res_profile[-6, -1] < 460:
+                # print(f"ValueError: 'too low heater!':{r_sim:.2f}_{L0:.2f}_{res_profile[-6, -1]:.2f}")
+                raise ValueError(f'{RED}too low heater!:{r_sim:.2f}_{L0:.2f}_{res_profile[-6, -1]:.2f}{ENDC}')
+
+            if r_sim < 0.5:
+                L0 *= (r_target / r_sim * 1.2)
+            elif 0.5 <= r_sim < 0.7:
+                L0 *= (r_target / r_sim * 1.1)
+            elif 0.7 <= r_sim < 0.8:
+                L0 *= (r_target / r_sim * 1.04)
+            elif 0.8 <= r_sim < 0.9:
+                L0 *= (r_target / r_sim * 1.02)
+            elif 0.9 <= r_sim < r_target:
+                L0 += max((r_target / r_sim - 1) * L0, 0.05)  # 0.1
+            elif r_sim > 1:
+                L0 -= 0.4
+                print('too long reactor too overlarge r!')
+                # raise Warning('too long reactor too overlarge r!')
+            else:
+                pass
+
+        return res_profile
+
+    def sim(self, save_profile=0, loop='direct', rtol=0.05, r_target=None):
         kn_model = self.chem_para['kn_model']
         loop = "direct" if self.recycle == 0 else loop
         if self.recycle == 1:
@@ -443,7 +486,7 @@ class Simulation:
             metric = pd.concat([p_metric, r_metric])
             res_path = 'result/sim_recycle_%s_%s_%.2f_log.xlsx' % (ks, kn_model, rtol)
         else:
-            res_profile = self.multi_reactor()
+            res_profile = self.multi_reactor() if r_target is None else self.to_r(r_target)
             r_metric = self.reactor_metric(res_profile)
             metric = r_metric
             res_path = 'result/sim_one_pass_%s_%s_%s_%s_log.xlsx' % (ks, kn_model, self.stage, datetime.now().date())
