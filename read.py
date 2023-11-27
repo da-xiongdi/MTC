@@ -136,6 +136,7 @@ class ReadData:
 
         for Din in paras_array_comb['Din']:
             for thick in paras_array_comb['Thick']:
+                thick = [round(k, 3) for k in thick]
                 for Tc in paras_array_comb['Tc']:
                     for qm in paras_array_comb['qm']:
                         for heater in paras_array_comb['heater']:

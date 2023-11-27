@@ -6,7 +6,8 @@ from CoolProp.CoolProp import PropsSI
 import scipy.optimize as opt
 
 from thermo import (ChemicalConstantsPackage, SRKMIX, FlashVL, CEOSLiquid, CEOSGas, HeatCapacityGas,
-                    GibbsExcessLiquid, MSRKMIX, SRKMIXTranslated)
+                    GibbsExcessLiquid, MSRKMIX, SRKMIXTranslated, SRK, IAPWS95Liquid)
+from thermo.unifac import DOUFSG, DOUFIP2016, UNIFAC
 
 warnings.filterwarnings('ignore')
 # T_gas = 200  # 310.93  # K
@@ -390,27 +391,6 @@ class Thermo:
             H.loc[comp] = np.polyval(self.hf_fit[comp], T)
         return H
 
-    def H1(self, T, pi):
-        """
-        calculate formation of enthalpy at T for given comp
-        :param T: K
-        :param pi: partial pressure (pd.Series)
-        :return: molar enthalpy (pd.Series)
-        """
-        H = pd.Series(index=pi.index)
-        Tc = pd.Series(index=pi.index)  # critical temperature
-        ps = pd.Series(index=pi.index)  # saturated pressure
-        for comp in pi.index:
-            Tc[comp] = PropsSI('Pcrit', comp)
-            ps[comp] = PropsSI('P', 'T', T, 'Q', 1, comp) * 1e-5 if T < Tc[comp] else np.nan
-            if not np.isnan(ps[comp]) and pi[comp] > ps[comp]:
-                # liquid phase
-                h_vl = PropsSI('H', 'T', T, 'Q', 1, comp) - PropsSI('H', 'T', T, 'Q', 0, comp)
-                # v_ps, v_pi =
-            else:
-                H.loc[comp] = np.polyval(self.hf_fit[comp], T)
-        return H
-
     def G(self, T, pi):
         """
         calculate formation of gibbs energy at T for given partial pressure
@@ -428,35 +408,138 @@ class Thermo:
 
 
 class VLEThermo:
-    def __init__(self, comp):
-        self.comp = comp.copy()
+    def __init__(self, comp, ref='ch', kij=None):
+        self.comp = np.array(comp)
         self.comp[comp == 'CO'] = 'carbon monoxide'
+        self.kij = kij
         self.const, self.cor = ChemicalConstantsPackage.from_IDs(self.comp)
-        self.cp, self.eos_kw = self.__eos_paras()
+        self.cp, self.eos_kw = self.eos_paras()
 
-    def __eos_paras(self, eos='SRK'):
+        # determine the properties at ref state
+        self.ref = ref
+        self.Sref, self.Href, self.Gref = self.ref_data()
+
+    def ref_data(self):
+        if self.ref == 'ch':
+            return self.__cfs()
+        elif self.ref == 'ev':
+            return self.__tds()
+        else:
+            raise ValueError('the reference state is not available')
+
+    def eos_paras(self, eos='SRK'):
         n_count = len(self.comp)
         cp_cal = [HeatCapacityGas(CASRN=self.const.CASs[i], MW=self.const.MWs[i], method='TRCIG') for i in
                   range(n_count)]
-        kijs_msrk = np.array([[0, 0.1164, 0.1, 0.3, 0.1164],
-                              [0.1164, 0, -0.125, -0.745, -0.0007],
-                              [0.1, -0.125, 0, -0.075, -0.37],
-                              [0.3, -0.745, -0.075, 0, -0.474],
-                              [0.1164, -0.0007, -0.37, -0.474, 0]])
-
-        kijs_srk = np.array([[0, -0.3462, 0.0148, 0.0737, 0],
+        if eos == 'SRK':
+            kijs = np.array([[0, -0.3462, 0.0148, 0.0737, 0],
                              [-0.3462, 0, 0, 0, 0.0804],
                              [0.0148, 0, 0, -0.0789, 0],
                              [0.0737, 0, -0.0789, 0, 0],
-                             [0, 0.0804, 0, 0, 0]])
+                             [0, 0.0804, 0, 0, 0]]) if self.kij is None else self.kij
 
-        p = [0, 0, 0.2359, 0.1277, 0]
-        eos_kwargs_srk = dict(Tcs=np.array(self.const.Tcs), Pcs=np.array(self.const.Pcs),
-                              omegas=np.array(self.const.omegas), kijs=kijs_srk)
-        eos_kwargs_msrk = dict(Tcs=np.array(self.const.Tcs), Pcs=np.array(self.const.Pcs),
-                               omegas=np.array(self.const.omegas), kijs=kijs_msrk, S2s=p)
-        eos_kwargs = eos_kwargs_srk if eos == 'SRK' else eos_kwargs_msrk
+            eos_kwargs = dict(Tcs=np.array(self.const.Tcs), Pcs=np.array(self.const.Pcs),
+                              omegas=np.array(self.const.omegas), kijs=kijs)
+        elif eos == 'MSRK':
+            p = [0, 0, 0.2359, 0.1277, 0]
+            kijs = np.array([[0, 0.1164, 0.1, 0.3, 0.1164],
+                             [0.1164, 0, -0.125, -0.745, -0.0007],
+                             [0.1, -0.125, 0, -0.075, -0.37],
+                             [0.3, -0.745, -0.075, 0, -0.474],
+                             [0.1164, -0.0007, -0.37, -0.474, 0]])
+            eos_kwargs = dict(Tcs=np.array(self.const.Tcs), Pcs=np.array(self.const.Pcs),
+                              omegas=np.array(self.const.omegas), kijs=kijs, S2s=p)
+
         return cp_cal, eos_kwargs
+
+    def __local_db(self):
+        pass
+
+    def __tds(self):
+        """
+        the environmental reference state
+        10.1016/j.apenergy.2016.10.103
+        """
+        s = [0.21389569, 0.130699312, 0.126593996, 0.070001677, 0.197809827]
+        # [0.205102, 0.130699, 0.070002]
+        # [0.21389569, 0.130699312, 0.126593996, 0.070001677, 0.197809827]
+        h = [83.772, 274.158, 753.974, 20.871, 334.259]
+        # [65.026, 274.158, 20.871]
+        # [83.772, 274.158, 753.974, 20.871, 334.259]
+        # g = []
+        # [19.999, 235.19, 716.23, 0, 275.282]
+        s = np.array(s) * 1e3
+        h = np.array(h) * 1e3
+        g = h - 298.15 * s
+        s_dep, h_dep = np.zeros(len(self.comp)), np.zeros(len(self.comp))
+        # s_dep = self.const.Svap_298s
+        # h_dep = self.const.Hvap_298s
+
+        # liquid = IAPWS95Liquid(T=298.15, P=1e5, zs=[1])
+        # print(liquid.H_dep())
+
+        # for i in range(len(self.comp)):
+        #     eos = SRK(Tc=self.const.Tcs[i], Pc=self.const.Pcs[0], omega=self.const.omegas[0],
+        #               T=298.15, P=1e5)
+        #     s_dep[i] = -eos.S_dep_g if i not in [1, 2] else -eos.S_dep_l  # [1, 2, 3]
+        #     h_dep[i] = -eos.H_dep_g if i not in [1, 2] else -eos.H_dep_l
+        # print(eos.Hvap(T=298.15))
+
+        h_dep[2:4] = np.array([-201 - (-239.2), -241.8 - (-285.8)]) * 1000
+        s_dep[2:4] = np.array([239.9 - 126.8, 188.8 - 70])
+        s += s_dep
+        h += h_dep
+        return np.array(s), np.array(h), np.array(g) * 1e3
+
+    def __cfs(self):
+        """
+        the formation energy at std state ideal gas state
+        """
+        g = np.array(self.const.Hfgs) - 298.15 * np.array(self.const.Sfgs)
+        return np.array(self.const.Sfgs), np.array(self.const.Hfgs), g
+
+    def cal_G(self, T, P, x):
+        frac = x / np.sum(x)
+        gas = CEOSGas(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw)
+        liquid = CEOSLiquid(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw)
+        flasher = FlashVL(self.const, self.cor, liquid=liquid, gas=gas)
+        PT = flasher.flash(zs=frac, T=T, P=P * 1E5)
+        G_dep = PT.G()
+        H_ref = np.dot(self.Href, frac)
+        S_ref = np.dot(self.Sref, frac)
+        return (G_dep + (H_ref - T * S_ref)) * np.sum(x) / 1000
+
+    def cal_S(self, T, P, x):
+        frac = x / np.sum(x)
+        gas = CEOSGas(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw)
+        liquid = CEOSLiquid(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw)
+        flasher = FlashVL(self.const, self.cor, liquid=liquid, gas=gas)
+        PT = flasher.flash(zs=frac, T=T, P=P * 1E5)
+        S_dep = PT.S()
+        S_ref = np.dot(self.Sref, frac)
+        return (S_dep + S_ref) * np.sum(x) / 1000
+
+    def cal_H(self, T, P, x):
+        frac = x / np.sum(x)
+        gas = CEOSGas(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw)
+        liquid = CEOSLiquid(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw)
+        flasher = FlashVL(self.const, self.cor, liquid=liquid, gas=gas)
+        PT = flasher.flash(zs=frac, T=T, P=P * 1E5)
+        H_dep = PT.H()
+        H_ref = np.dot(self.Href, frac)
+        return (H_dep + H_ref) * np.sum(x) / 1000
+
+    def cal_E(self, T, P, x):
+        """
+        :return: the exergy of material
+        """
+        return self.cal_H(T, P, x) - self.cal_S(T, P, x) * 298.15
+
+    def cal_alpha(self, T, P, x):
+        """
+        :return: the energy quality of material
+        """
+        return self.cal_E(T, P, x) / self.cal_H(T, P, x)
 
     def p_dew(self, T, x):
         frac = x / np.sum(x)
@@ -480,7 +563,7 @@ class VLEThermo:
 
     def phi(self, T, P, x):
         frac = x / np.sum(x)
-        gas = CEOSGas(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw, T=T, P=P*1e5,zs=frac)
+        gas = CEOSGas(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw, T=T, P=P * 1e5, zs=frac)
         liquid = CEOSLiquid(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw)
         flasher = FlashVL(self.const, self.cor, liquid=liquid, gas=gas)
         TP = flasher.flash(zs=frac, T=T, P=P * 1E5)
@@ -489,14 +572,42 @@ class VLEThermo:
 
     def flash(self, T, P, x):
         frac = x / np.sum(x)
-        gas = CEOSGas(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw)
+        gas = CEOSGas(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw, T=T, P=P * 1E5, zs=frac)
         liquid = CEOSLiquid(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw)
         flasher = FlashVL(self.const, self.cor, liquid=liquid, gas=gas)
         TP = flasher.flash(zs=frac, T=T, P=P * 1E5)
-
         # print(frac)
-        return TP.gas.zs
+        try:
+            flasher_gas = TP.gas.zs
+        except AttributeError:
+            flasher_gas = None
+        try:
+            flasher_liq = TP.liquid0.zs
+        except AttributeError:
+            flasher_liq = None
+        return flasher_gas, flasher_liq
 
+    def cal_Hlg(self, T, x):
+        x = np.array(x)
+        frac = x / np.sum(x)
+        gas = CEOSGas(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw)
+        liquid = CEOSLiquid(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw)
+        flasher = FlashVL(self.const, self.cor, liquid=liquid, gas=gas)
+        TV = flasher.flash(zs=frac, T=T, VF=1)
+        TL = flasher.flash(zs=frac, T=T, VF=0)
+        dH = TV.H() - TL.H()
+        # print(frac)
+        return dH
+
+    def flash_q(self, T, P, x):
+        frac = x / np.sum(x)
+        gas = CEOSGas(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw, T=T, P=P * 1E5, zs=frac)
+        liquid = CEOSLiquid(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw)
+        flasher = FlashVL(self.const, self.cor, liquid=liquid, gas=gas)
+        TP = flasher.flash(zs=frac, T=T, P=P * 1E5)
+        dH = gas.H() - TP.H()
+        # print(frac)
+        return dH
 # mixture_property(490, pd.Series([0.25, 0.75], index=['CO2', 'hydrogen']), 70)
 # tt = VLE(293, ["H2O"])
 # print(tt.phi(pd.Series([1], index=["H2O"]), 1, 1))
