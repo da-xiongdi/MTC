@@ -173,7 +173,7 @@ class Insulation:
         if xi_h["Methanol"] < 3e-3 and xi_h['H2O'] < 1e-3:
             # no reacted gas, end the calculation
             res = {
-                "mflux": np.zeros(len(self.comp_list)),
+                "mflux": np.zeros(len(self.comp_list)), "hlg": 0,
                 "hflux": 0, "Tvar": 0, "dev": 0
             }
             return res
@@ -181,8 +181,6 @@ class Insulation:
         elif (xi_h["Methanol"] > 3e-3 and xi_h['H2O'] < 1e-3) or (xi_h["Methanol"] < 3e-3 and xi_h['H2O'] > 1e-3):
             # only one condensable spec is formed
             [diff_spec, stat_spec] = [0, 1] if xi_h["Methanol"] >= 3e-3 else [1, 0]
-            # print(diff_spec)
-            # print(Pi_h[diff_spec + 2], P_sat[diff_spec],diff_spec)
 
             if Pi_h[diff_spec + 2] < P_sat[diff_spec]:
                 # condensation does not occur
@@ -195,6 +193,7 @@ class Insulation:
                 dT = qcv_cond / Ft / property_h["cp_m"]
                 # dT = -dT if self.location == 0 else dT
                 na_CH3OH, na_H20, dev = 0, 0, 0
+                qcv_lat = 0
             else:
                 Pi_h_other_sum = P - Pi_h[diff_spec]
                 Pi_c_other_sum = P - P_sat[diff_spec]
@@ -253,6 +252,7 @@ class Insulation:
                 # temperature variation inside the reactor
                 property_h = mixture_property(Th, xi_h, P)  # rho is not used, hence z=1 is used
                 dT = qcv_cond / Ft / property_h["cp_m"]
+                qcv_lant = 0
                 # dT = -dT if self.location == 0 else dT
                 na_CH3OH, na_H20, dev = 0, 0, 0
             else:
@@ -261,7 +261,8 @@ class Insulation:
 
                 # flash_comp, _ = vle_c.flash(P=P, mix=xi_h)
                 # xi_c = flash_comp.loc['V']
-                xi_c = pd.Series(vle_c.flash(T=Tc, P=P, x=xi_h.values), index=self.comp_list)
+                flash_comp, h_vl = vle_c.flash(T=Tc, P=P, x=xi_h.values)
+                xi_c = pd.Series(flash_comp, index=self.comp_list)
 
                 qcv_delta = 1e5
                 Tw = Th - 0.1
@@ -319,8 +320,14 @@ class Insulation:
                 print('err')
                 print(cond_list, cal_property)
                 print("*" * 10)
+
+        # calculate the latent heat
+        qcv_lat = (PropsSI('H', 'T', Tc, 'Q', 1, 'water') -
+                   PropsSI('H', 'T', Tc, 'Q', 0, 'water')) / 1000 * 18.015 * na_H20 + \
+                  (PropsSI('H', 'T', Tc, 'Q', 1, 'Methanol') -
+                   PropsSI('H', 'T', Tc, 'Q', 0, 'Methanol')) / 1000 * 32.042 * na_CH3OH
         res = {
-            "mflux": dF, "hflux": qcv_cond,
+            "mflux": dF, "hflux": qcv_cond, "hlg": qcv_lat,
             "Tvar": dT, "dev": dev
         }
         return res  # dF, dT * h_phi, dev
@@ -331,25 +338,6 @@ class Insulation:
 # print(Insulation.mixture_property(480, P))
 # print(Insulation.bi_diff(298, 1))
 
-# def ode_single(inner_cond, outer_cond, P, properties):
-#     """
-#     ode for the concentration distribution along the channel, only one condensate
-#     :param inner_cond: temperature, molar fraction, and radius at inside;list
-#     :param outer_cond: temperature, molar fraction, and radius at outside; list
-# [cp, D, k] = properties
-
-# a = [373, 0.1, 0.03]
-# b = [313, 0.048, 0.04]
-
-# def ode_multi(inner_cond, outer_cond, P, properties):
-#     """
-#     ode for the concentration distribution along the channel, two condensates
-#     :param inner_cond: temperature, molar fraction, and radius at inside;list
-#     :param outer_cond: temperature, molar fraction, and radius at outside; list
-#     :param P: pressure of mixture, bar
-#     :param properties: heat capacity, diffusion coefficient, thermal conductivity of mixture; list
-#     :return: concentration and its slop
-#     """
 
 # cold_cond = [333, 0.03, 0.01, 0.0225]
 # hot_cond = [523, 0.08, 0.1, 0.015]

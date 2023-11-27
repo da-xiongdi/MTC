@@ -3,122 +3,27 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 from scipy.integrate import solve_ivp
+from prop_calculator import VLEThermo
 
 from insulator import Insulation
 from thermo import (ChemicalConstantsPackage, SRKMIX, FlashVL, CEOSLiquid, CEOSGas, HeatCapacityGas,
                     GibbsExcessLiquid, MSRKMIX, SRKMIXTranslated, SRK)
 
 
-class Gibbs:
+class Gibbs(VLEThermo):
     def __init__(self, comp, ref='ch', elements=None):
+        super().__init__(comp, ref)
         self.comp = comp
         # elements counts for each comps
         self.elements = self.__elements() if elements is None else elements
         self.const, self.cor = ChemicalConstantsPackage.from_IDs(self.comp.tolist())
-        self.cp, self.eos_kw = self.__eos_paras()
-
-        # determine the properties at ref state
-        self.ref = ref
-        self.Sref, self.Href, self.Gref = self.ref_data()
+        self.cp, self.eos_kw = self.eos_paras()
 
     @staticmethod
     def __elements():
         return np.array([[1, 0, 1, 0, 1],
                          [0, 2, 4, 2, 0],
                          [2, 0, 1, 1, 1]])
-
-    def ref_data(self):
-        if self.ref == 'ch':
-            return self.__cfs()
-        elif self.ref == 'ev':
-            return self.__tds()
-        else:
-            raise ValueError('the reference state is not available')
-
-    def __tds(self):
-        """
-        the environmental reference state
-        10.1016/j.apenergy.2016.10.103
-        """
-        s = [0.21389569, 0.130699312, 0.126593996, 0.070001677, 0.197809827]
-        h = [83.772, 274.158, 753.974, 20.871, 334.259]
-        g = [19.999, 235.19, 716.23, 0, 275.282]
-        s = np.array(s) * 1e3
-        h = np.array(h) * 1e3
-        s_dep, h_dep = np.zeros(5), np.zeros(5)
-        for i in range(5):
-            eos = SRK(Tc=self.const.Tcs[i], Pc=self.const.Pcs[0], omega=self.const.omegas[0],
-                      T=298.15, P=1e5)
-            s_dep[i] = -eos.S_dep_g if i not in [1, 2, 3] else -eos.S_dep_l
-            h_dep[i] = -eos.H_dep_g if i not in [1, 2, 3] else -eos.H_dep_l
-        # print(h_dep)
-        # print(h)
-        # h_dep[:2] = 0
-        s += s_dep
-        h += h_dep
-        return np.array(s), np.array(h), np.array(g) * 1e3
-
-    def __cfs(self):
-        """
-        the formation energy at std state ideal gas state
-        """
-        g = np.array(self.const.Hfgs) - 298.15 * np.array(self.const.Sfgs)
-        return np.array(self.const.Sfgs), np.array(self.const.Hfgs), g
-
-    def __eos_paras(self, eos='SRK'):
-        n_count = len(self.comp)
-        cp_cal = [HeatCapacityGas(CASRN=self.const.CASs[i], MW=self.const.MWs[i], method='TRCIG') for i in
-                  range(n_count)]
-        kijs_msrk = np.array([[0, 0.1164, 0.1, 0.3, 0.1164],
-                              [0.1164, 0, -0.125, -0.745, -0.0007],
-                              [0.1, -0.125, 0, -0.075, -0.37],
-                              [0.3, -0.745, -0.075, 0, -0.474],
-                              [0.1164, -0.0007, -0.37, -0.474, 0]])
-
-        kijs_srk = np.array([[0, -0.3462, 0.0148, 0.0737, 0],
-                             [-0.3462, 0, 0, 0, 0.0804],
-                             [0.0148, 0, 0, -0.0789, 0],
-                             [0.0737, 0, -0.0789, 0, 0],
-                             [0, 0.0804, 0, 0, 0]])
-
-        p = [0, 0, 0.2359, 0.1277, 0]
-        eos_kwargs_srk = dict(Tcs=np.array(self.const.Tcs), Pcs=np.array(self.const.Pcs),
-                              omegas=np.array(self.const.omegas), kijs=kijs_srk)
-        eos_kwargs_msrk = dict(Tcs=np.array(self.const.Tcs), Pcs=np.array(self.const.Pcs),
-                               omegas=np.array(self.const.omegas), kijs=kijs_msrk, S2s=p)
-        eos_kwargs = eos_kwargs_srk if eos == 'SRK' else eos_kwargs_msrk
-        return cp_cal, eos_kwargs
-
-    def cal_G(self, T, P, x):
-        frac = x / np.sum(x)
-        gas = CEOSGas(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw)
-        liquid = CEOSLiquid(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw)
-        flasher = FlashVL(self.const, self.cor, liquid=liquid, gas=gas)
-        PT = flasher.flash(zs=frac, T=T, P=P * 1E5)
-        G_dep = PT.G()
-        H_ref = np.dot(self.Href, frac)
-        S_ref = np.dot(self.Sref, frac)
-        return (G_dep + (H_ref - T * S_ref)) * np.sum(x) / 1000
-
-    def cal_S(self, T, P, x):
-        frac = x / np.sum(x)
-        gas = CEOSGas(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw)
-        liquid = CEOSLiquid(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw)
-        flasher = FlashVL(self.const, self.cor, liquid=liquid, gas=gas)
-        PT = flasher.flash(zs=frac, T=T, P=P * 1E5)
-        S_dep = PT.S()
-        S_ref = np.dot(self.Sref, frac)
-        return (S_dep + S_ref) * np.sum(x) / 1000
-
-    def cal_H(self, T, P, x):
-        frac = x / np.sum(x)
-        gas = CEOSGas(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw)
-        liquid = CEOSLiquid(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw)
-        flasher = FlashVL(self.const, self.cor, liquid=liquid, gas=gas)
-        PT = flasher.flash(zs=frac, T=T, P=P * 1E5)
-        H_dep = PT.H()
-        H_ref = np.dot(self.Href, frac)
-        return (H_dep + H_ref) * np.sum(x) / 1000
 
     def cal_Gr(self, T, P, sto):
         sto = np.array(sto)
@@ -147,18 +52,6 @@ class Gibbs:
         PT = flasher.flash(zs=frac, T=T, P=P * 1E5)
         H_dep = PT.H()
         return (H_dep_in - H_dep) * np.sum(x) / 1000  # kW
-
-    def cal_dH2(self, T, P, x):
-        frac = x / np.sum(x)
-        gas = CEOSGas(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw, T=T, P=P, zs=frac)
-        liquid = CEOSLiquid(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw)
-        flasher = FlashVL(self.const, self.cor, liquid=liquid, gas=gas)
-        PT = flasher.flash(zs=frac, T=T, P=P * 1E5)
-        # gas_sep = PT.gas.zs
-        liq_sep = PT.liquid0.zs
-        TV = flasher.flash(zs=liq_sep, T=T, VF=1).H() - flasher.flash(zs=liq_sep, T=T, VF=0).H()
-
-        return TV / 1000  # kJ/mol
 
     def cal_dn(self, T, P, x):
         frac = x / np.sum(x)
@@ -264,6 +157,7 @@ class Gibbs:
         sep_work, dHrs, Ws = [], [], []
         qs = []
         qconds = []
+        prods_CH4O = []
         while r_t < r_target:
             # print(reactor_feed.values)
             product, _ = self.min_eq(T, P, reactor_feed)
@@ -274,20 +168,23 @@ class Gibbs:
 
             # generate the feed for the next stage through separator
             sp_feed_paras = [T, P, product]
-            reactor_feed, Q_diff = self.cond_sep(sp_feed_paras, sp_paras)
+            reactor_feed, Q_diff, prod_CH4O = self.cond_sep(sp_feed_paras, sp_paras)
             # self.cond_sep(sp_feed_paras, sp_paras)
             # self.cond_sep(sp_feed_paras, sp_paras) self.cond_sep_along(sp_feed_paras, sp_paras, sf_target)
             # metric of separator
             qs.append(Q_diff)  # kW
+            prods_CH4O.append(prod_CH4O)
 
             # metric of the whole process
             r_t = (feed_comp[0] - product[0]) / feed_comp[0]  # total conversion of CO2
             s_t = (feed_comp[0] - product[0] - product[-1]) / (feed_comp[0] - product[0])  # selectivity of CH4O
             products.append(product.tolist())
             dHrs.append(dHr)
+        prods_CH4O = np.array(prods_CH4O)
         qs = np.array(qs)
         r_qin_qs = 1 - abs((r_t * feed_comp[0] * 50) / np.sum(qs))
-        sim_metric = pd.Series([r_t, s_t, np.sum(qs), r_qin_qs], index=['r', 's', 'Q', 'rq_in_diff'])
+        sim_metric = pd.Series([r_t, s_t, np.sum(qs), np.sum(prods_CH4O), r_qin_qs],
+                               index=['r', 's', 'Q', 'Y_CH4O', 'rq_in_diff'])
 
         return sim_metric  # /produced_CH4O  # , np.array(qconds)
 
@@ -315,7 +212,7 @@ class Gibbs:
         if reactor_feed[2] < 0:
             raise ValueError('Gas flow should be positive!')
         else:
-            return reactor_feed, Q
+            return reactor_feed, Q, N_CH3OH
 
     def cond_sep_along(self, feed_paras, sep_paras, r_target):
         """
@@ -425,8 +322,7 @@ def find_best_cond(feed, T_range, Din_range, Dd_range):
     :param Dd_range:
     :return:
     """
-
-    sims_res = pd.DataFrame(columns=['Tc', 'Din', 'Dd', 'r', 's', 'Q'],
+    sims_res = pd.DataFrame(columns=['Tc', 'Din', 'Dd', 'r', 's', 'Q', 'rq_in_diff'],
                             index=np.zeros(len(T_range) * len(Din_range) * len(Dd_range)))
 
     i = 0
@@ -441,7 +337,7 @@ def find_best_cond(feed, T_range, Din_range, Dd_range):
                 i += 1
     path = f'res_Gibbs/eq_diff_{min(T_range)}_{max(T_range)}_' \
            f'{min(Din_range):.2f}_{max(Din_range):.2f}_' \
-           f'{min(Dd_range):.2f}_{max(Dd_range):.2f}.xlsx'
+           f'{min(Dd_range):.3f}_{max(Dd_range):.3f}.xlsx'
     sims_res.to_excel(path, index=True, header=True, sheet_name='conversion')
 
 
@@ -452,52 +348,16 @@ def metric_single(feed, Tc, Din, Dd, r):
     return res
 
 
-if __name__ == 'main':
+if __name__ == '__main__':
     in_gas = pd.Series([0.008154456, 0.024463369, 0, 0, 0], index=["CO2", "H2", "Methanol", "H2O", "carbon monoxide"])
     # 0.008154456, 0.024463369, 0, 0, 0
     # 0.00522348 0.01617213 0.00268013 0.00293098 0.00025085
-    # Tcs = np.arange(378, 403, 5)
-    # Dins = np.arange(0.02, 0.08, 0.01)
-    # thick = np.arange(0.002, 0.014, 0.002)
+    Tcs = np.arange(323, 403, 5)
+    Dins = np.arange(0.02, 0.08, 0.01)
+    thick = np.arange(0.002, 0.014, 0.002)
 
-    # find_best_cond(in_gas, Tcs, Dins, thick)
+    find_best_cond(in_gas, Tcs, Dins, thick)
     # sim_res = metric_single(in_gas, Tc=353, Din=0.08, Dd=0.01, r=0.95)
     # print(sim_res)
 
     # metric_single()
-    # T, p = 493, 70
-    gibbs_cal2 = Gibbs(in_gas.index, ref='ev')
-    # feed = np.array([1, 1, 0, 0, 0])
-    # g = gibbs_cal2.cal_G(T,p,feed)
-    # h = gibbs_cal2.cal_H(T,p,feed)
-    # s = gibbs_cal2.cal_S(T,p,feed)
-    # print(g,h,s)
-    # print(h-T*s)
-    # gr = gibbs_cal2.cal_Gr(503, 70, [-1, -3, 1, 1, 0])
-    # hr = gibbs_cal2.cal_Hr(503, 70, [-1, -3, 1, 1, 0])
-    # sr = gibbs_cal2.cal_Sr(503, 70, [-1, -3, 1, 1, 0])
-    # print(gr, hr, sr)
-    # print((hr-gr)/503)
-    # print(hr*(1-298.15/503)+gr)
-    # print(sr*298.15)
-
-    T1, T2, p1, p2 = 473, 473, 60, 60
-    feed1 = np.array([0, 1, 0, 0, 0])
-    feed2 = np.array([1, 0, 0, 0, 0])
-    feed = np.array([1, 3, 0, 0, 0])
-    product = np.array([0.582, 1.746, 0.418, 0.418, 0])
-    # product = np.array([0.848, 0.848, 0, 0.152, 0.152])
-    # product = np.array([0, 0, 0, 1, 1])
-    # gr = gibbs_cal2.cal_Gr(503, 70, [-1, -3, 1, 1, 0])
-    # sr = gibbs_cal2.cal_Sr(503, 70, [-1, -3, 1, 1, 0])
-    # print(gibbs_cal2.ref_data()[1]/1000)
-
-    h1 = gibbs_cal2.cal_H(T1, p1, feed)  # / np.sum(feed)
-    # (gibbs_cal2.cal_H(T1, p, feed1) + gibbs_cal2.cal_H(T1, p, feed2)) / np.sum(feed1 + feed2)
-    h2 = gibbs_cal2.cal_H(T2, p2, product)  # / np.sum(product)
-    s1 = gibbs_cal2.cal_S(T1, p1, feed)  # / np.sum(feed)
-    # (gibbs_cal2.cal_S(T1, p, feed1) + gibbs_cal2.cal_S(T1, p, feed1)) / np.sum(feed1 + feed2)
-    s2 = gibbs_cal2.cal_S(T2, p2, product)  # / np.sum(product)
-
-    print(h1, h2, (h2 - h1) / 0.418)
-    print((h1 - s1 * 298.15 - (h2 - s2 * 298.15)) / 0.418)

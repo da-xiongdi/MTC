@@ -1,6 +1,7 @@
 import os.path
 import warnings
 
+import chemicals
 import scipy
 
 from prop_calculator import mixture_property, VLE
@@ -11,10 +12,10 @@ from CoolProp.CoolProp import PropsSI
 from datetime import datetime
 from reactor import Reaction
 
-
 # from gibbs import Gibbs
 RED = '\033[91m'
 ENDC = '\033[0m'
+
 
 class Simulation:
     def __init__(self, reactors_para, chem_para, feed_para, insulator_para, eos, drop):
@@ -205,7 +206,7 @@ class Simulation:
         N_CH3OH_H2O = dF_diff_ch3oh / dF_diff_h2o
         dH_diff = sim_res[-2, -1]
         dH_heater = sim_res[-1, -1]
-        yield_CH3OH = dF_diff_ch3oh if 1 in self.status else dF_react_ch3oh
+        yield_CH3OH = dF_diff_ch3oh if 1 in self.status else dF_react_ch3oh  # mol/s
         eff = dH_heater / 1000 / (yield_CH3OH * 32)  # kJ/g CH3OH
         res = pd.Series([r, s_react, yield_CH3OH, dP, To_r,
                          Tin_c, dH_react, dH_diff, dH_heater, eff, sp_ch3oh, sp_h2o, N_CH3OH_H2O],
@@ -304,10 +305,10 @@ class Simulation:
                 # r_v_ins_v_react = 0.08 for CO exp 1999
                 coe_Tc = -1 if location == 1 else 1
                 res_diff = insula_sim.flux(Tr, P, F, Tc)  # simulation of insulator
-                dTc_dz = -pattern * (coe_Tc * res_diff['hflux'] * nit) / qm / 76
+                dTc_dz = -pattern * (coe_Tc * (res_diff['hflux'] + res_diff['hlg']) * nit) / qm / 76
             else:
                 r_v_ins_v_react = 0
-                res_diff = {'mflux': np.zeros(len(self.comp_list)), 'hflux': 0, "Tvar": 0}
+                res_diff = {'mflux': np.zeros(len(self.comp_list)), 'hflux': 0, "Tvar": 0, 'hlg': 0}
                 dTc_dz = -pattern * self.Uc * (Tc - Tr) * np.pi * Dt / (property_feed["cp_m"] * np.sum(F_in))
 
             heat_cap = mixture_property(Tr, pd.Series(F / np.sum(F), index=self.comp_list), P)['cp_m'] * np.sum(F)
@@ -437,31 +438,40 @@ class Simulation:
             raise ValueError('stage > 2 is not supported with given conversion')
         # guess a length
         L0, r_sim = 1, 0
+        Din, Dd, Tc_in, heater = self.Din[1], self.insulators['Thick2'], self.Tc[1], self.heater[1]
+        q_h = round((500 - Tc_in) / Dd * 0.2 * np.pi * Din * heater, 2)
 
         while r_sim < r_target or r_sim > 1:
             self.reactors_para['L2'] = self.L[1] = self.reactor_para.iloc[1]['L'] = round(L0, 2)
-            res_profile = self.multi_reactor()
+            try:
+                res_profile = self.multi_reactor()
+            except (chemicals.exceptions.PhaseCountReducedError, AttributeError):
+                L0 *= 0.95
             r_metric = self.reactor_metric(res_profile)
             r_sim = r_metric['conversion']
             print(r_sim)
             # detect the improper configuration
             if L0 > 15:
                 # print(f"ValueError: 'too low r too long reactor!':{r_sim:.2f}_{L0:.2f}")
-                raise ValueError(f"{RED}ValueError: 'too low r too long reactor!':{r_sim:.2f}_{L0:.2f}{ENDC}")
+                return res_profile
+                # raise ValueError(f"{RED}ValueError: 'too low r too long reactor!':{r_sim:.2f}_{L0:.2f}{ENDC}")
             if res_profile[-6, -1] < 460:
+                return res_profile
                 # print(f"ValueError: 'too low heater!':{r_sim:.2f}_{L0:.2f}_{res_profile[-6, -1]:.2f}")
-                raise ValueError(f'{RED}too low heater!:{r_sim:.2f}_{L0:.2f}_{res_profile[-6, -1]:.2f}{ENDC}')
+                # raise ValueError(f'{RED}too low heater!:{r_sim:.2f}_{L0:.2f}_{res_profile[-6, -1]:.2f}{ENDC}')
 
-            if r_sim < 0.5:
-                L0 *= (r_target / r_sim * 1.2)
-            elif 0.5 <= r_sim < 0.7:
-                L0 *= (r_target / r_sim * 1.1)
+            if r_sim < 0.4:
+                L0 *= (r_target / r_sim * 1.3) if q_h <= 500 else (r_target / r_sim * 1.2)
+            elif 0.4 <= r_sim < 0.6:
+                L0 *= (r_target / r_sim * 1.2) if q_h <= 500 else (r_target / r_sim * 1.1)
+            elif 0.6 <= r_sim < 0.7:
+                L0 *= (r_target / r_sim * 1.1) if q_h <= 500 else (r_target / r_sim * 1.05)
             elif 0.7 <= r_sim < 0.8:
                 L0 *= (r_target / r_sim * 1.04)
             elif 0.8 <= r_sim < 0.9:
                 L0 *= (r_target / r_sim * 1.02)
-            elif 0.9 <= r_sim < r_target:
-                L0 += max((r_target / r_sim - 1) * L0, 0.05)  # 0.1
+            elif 0.9 <= r_sim < 1:
+                L0 += max((r_target / r_sim - 1) * L0, 0.01) if q_h >= 800 else max((r_target / r_sim - 1) * L0, 0.05)
             elif r_sim > 1:
                 L0 -= 0.4
                 print('too long reactor too overlarge r!')
@@ -526,3 +536,4 @@ class Simulation:
                     save_data.to_excel(writer, index=False, sheet_name=sheet_name)
             except FileNotFoundError:
                 save_data.to_excel(sim_path, index=False, sheet_name=sheet_name)
+        return res_save
