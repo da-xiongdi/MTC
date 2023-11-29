@@ -155,38 +155,101 @@ class Gibbs(VLEThermo):
         products, r_each = [], []
         reactor_feed = feed_comp
         sep_work, dHrs, Ws = [], [], []
-        qs = []
-        qconds = []
-        prods_CH4O = []
+        Q, E = [], []
+        prods_liq = []
         while r_t < r_target:
             # print(reactor_feed.values)
             product, _ = self.min_eq(T, P, reactor_feed)
             # metric of single reactor
             dHr = self.cal_H(T, P, product) - self.cal_H(T, P, feed_comp.values)  # dH during reaction, kW
+            dHrs.append(dHr)
             r = (reactor_feed[0] - product[0]) / reactor_feed[0]  # CO2 conversion
             r_each.append([r])
 
             # generate the feed for the next stage through separator
             sp_feed_paras = [T, P, product]
-            reactor_feed, Q_diff, prod_CH4O = self.cond_sep(sp_feed_paras, sp_paras)
-            # self.cond_sep(sp_feed_paras, sp_paras)
-            # self.cond_sep(sp_feed_paras, sp_paras) self.cond_sep_along(sp_feed_paras, sp_paras, sf_target)
+            sep_res = self.flash_sep(sp_feed_paras, sp_paras)
+            reactor_feed = pd.Series(sep_res['gas'], index=self.comp)
+            # reactor_feed, Q_diff, prod_CH4O = self.cond_sep(sp_feed_paras, sp_paras)
+
             # metric of separator
-            qs.append(Q_diff)  # kW
-            prods_CH4O.append(prod_CH4O)
+            Q.append([sep_res['H_c'], sep_res['H_h']])
+            E.append([sep_res['E_c'], sep_res['E_h']])
+            prods_liq.append(sep_res['liq'])
 
             # metric of the whole process
             r_t = (feed_comp[0] - product[0]) / feed_comp[0]  # total conversion of CO2
             s_t = (feed_comp[0] - product[0] - product[-1]) / (feed_comp[0] - product[0])  # selectivity of CH4O
             products.append(product.tolist())
-            dHrs.append(dHr)
-        prods_CH4O = np.array(prods_CH4O)
-        qs = np.array(qs)
-        r_qin_qs = 1 - abs((r_t * feed_comp[0] * 50) / np.sum(qs))
-        sim_metric = pd.Series([r_t, s_t, np.sum(qs), np.sum(prods_CH4O), r_qin_qs],
-                               index=['r', 's', 'Q', 'Y_CH4O', 'rq_in_diff'])
+        prods_CH4O = np.array(prods_liq)  # .reshape(len(prods_CH4O), 1)
+        Q, E = np.array(Q), np.array(E)
+        # print(Q.shape, E.shape, prods_CH4O.shape)
+        res = np.hstack((Q, E, prods_CH4O))
+        sim_metric = pd.DataFrame(res, columns=['H_c', 'H_h', 'E_c', 'E_h'] + self.comp.tolist())
+
+        print(self.series_metric(sim_metric, r_t, s_t))
+        # r_qin_qs = 1 - abs((r_t * feed_comp[0] * 50) / np.sum(qs))
+        # sim_metric = pd.Series([r_t, s_t, np.sum(qs), np.sum(prods_CH4O), r_qin_qs],
+        #                        index=['r', 's', 'Q', 'Y_CH4O', 'rq_in_diff'])
 
         return sim_metric  # /produced_CH4O  # , np.array(qconds)
+
+    def series_metric(self, stage_res, r, s):
+        """
+        calculate the metric of series reactor with flash sep
+        :param stage_res: sim res of each stage(pd.Dataframe)
+        :param r: conversion of the whole process (float)
+        :param s: selectivity of the whole process (floate
+        :return:
+        """
+        energy_metric = stage_res[['H_c', 'H_h', "E_c", "E_h"]].sum()
+        yield_ch3oh = pd.Series(stage_res["Methanol"].sum(), index=['y_ch3oh'])
+        r_CH3OH_H2O = pd.Series(stage_res["Methanol"].sum() / stage_res["H2O"].sum(), index=['r_CH3OH_H2O'])
+        temp = pd.Series([r, s], index=['r', 's'])
+        metric = pd.concat((energy_metric, yield_ch3oh, r_CH3OH_H2O, temp))
+        return metric
+
+    def ideal_sep(self, feed_paras, sep_paras):
+        """
+        perform separation through a flash can
+        :param feed_paras: [Tin, Pin, feed] (list)
+        :param sep_paras: separation ratio (dict)
+        """
+        [Tin, Pin, feed] = feed_paras
+        sp = sep_paras['sp']
+        prod_out = feed.copy()*sp
+        prod_out[[0, 1, -1]] = 0
+        feed_out = feed-prod_out
+
+        # metric of sep
+        # released energy during sep, kW
+        H = self.cal_H(Tin, Pin, prod_out) + self.cal_H(Tin, Pin, feed_out) - self.cal_H(Tin, Pin, feed)
+        # released exergy during sep, kW
+        E = self.cal_E(Tin, Pin, prod_out) + self. cal_E(Tin, Pin, feed_out) - self.cal_E(Tin, Pin, feed)
+
+        res = dict(gas=feed_out, liq=prod_out, H_c=H, E_c=E)
+        return res
+
+    def flash_sep(self, feed_paras, sep_paras):
+        """
+        perform separation through a flash can
+        :param feed_paras: [Tin, Pin, feed] (list)
+        :param sep_paras: condensation temperature (dict)
+        """
+        [Tin, Pin, feed] = feed_paras
+        Tc = sep_paras['Tc']
+        gas, liq, vf = self.flash(Tc, Pin, feed)
+        gas_out = np.array(gas) * vf * np.sum(feed)
+        liq_out = np.array(liq) * (1 - vf) * np.sum(feed)
+
+        # metric of sep
+        H_c = self.cal_H(Tc, Pin, feed) - self.cal_H(Tin, Pin, feed)  # released energy during sep, kW
+        E_c = self.cal_E(Tc, Pin, feed) - self.cal_E(Tin, Pin, feed)  # released exergy during sep, kW
+        H_h = self.cal_H(Tin, Pin, gas_out) - self.cal_H(Tc, Pin, gas_out)  # required energy during sep, kW
+        E_h = self.cal_E(Tin, Pin, gas_out) - self.cal_E(Tc, Pin, gas_out)  # required exergy during sep, kW
+
+        res = dict(gas=gas_out, liq=liq_out, H_c=H_c, E_c=E_c, E_h=E_h, H_h=H_h)
+        return res
 
     def cond_sep(self, feed_paras, sep_paras):
         """
@@ -356,8 +419,9 @@ if __name__ == '__main__':
     Dins = np.arange(0.02, 0.08, 0.01)
     thick = np.arange(0.002, 0.014, 0.002)
 
-    find_best_cond(in_gas, Tcs, Dins, thick)
-    # sim_res = metric_single(in_gas, Tc=353, Din=0.08, Dd=0.01, r=0.95)
-    # print(sim_res)
+    # find_best_cond(in_gas, Tcs, Dins, thick)
+    sim_res = metric_single(in_gas, Tc=353, Din=0.08, Dd=0.01, r=0.95)
+    print(sim_res)
+    print(sim_res[['H_c', 'H_h', "E_c", "E_h"]].sum())
 
     # metric_single()

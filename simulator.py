@@ -4,7 +4,7 @@ import warnings
 import chemicals
 import scipy
 
-from prop_calculator import mixture_property, VLE
+from prop_calculator import mixture_property, VLEThermo
 from insulator import Insulation, ks
 import numpy as np
 import pandas as pd
@@ -144,6 +144,7 @@ class Simulation:
         :param species: component of input gas, list
         :return: molar flux of components, temperature
         """
+        species = [i if i != 'carbon monoxide' else 'CO' for i in species]
         num = len(species)
         F_in = np.vstack((F1, F2))
         T_in = np.array([T1, T2])
@@ -172,6 +173,38 @@ class Simulation:
                     H_diff = cal_diff
                     T_out = T
                 if cal_diff / H_t < 0.001:
+                    T_out = T
+                    break
+        return F_out, T_out
+
+    @staticmethod
+    def mixer_real(F1, T1, F2, T2, P, species):
+        """
+        real mixer
+        ref: Modelling, Estimation and Optimization of the Methanol Synthesis with Catalyst Deactivation
+        :param F1: component of input gas 1, mol/s; ndarray
+        :param T1: temperature of input gas 1, K
+        :param F2: component of input gas 2, mol/s; ndarray
+        :param T2: temperature of input gas 2, K
+        :param P: pressure of input gas, bar
+        :param species: component of input gas, list
+        :return: molar flux of components, temperature
+        """
+        cal = VLEThermo(species)
+        P = P * 1E5
+        H_in = cal.cal_H(T1, P, F1) + cal.cal_H(T2, P, F2)
+        F_out = F1 + F2
+        H_diff = 100000
+        if abs(T1 - T2) < 0.2:
+            T_out = (T1 + T2) / 2
+        else:
+            for T in np.arange(min(T1 - 10, T2 - 10), max(T1 + 10, T2 + 10), 0.1):
+                H_o = cal.cal_H(T, P, F_out)
+                cal_diff = abs(H_o - H_in)
+                if cal_diff < H_diff:
+                    H_diff = cal_diff
+                    T_out = T
+                if cal_diff / H_in < 0.001 / 1e3:
                     T_out = T
                     break
         return F_out, T_out
@@ -226,24 +259,16 @@ class Simulation:
         # [L1, F_CO2, F_H2, F_CH3OH, F_H2O, F_CO, Tr, Tc, q_react, q_diff]
         # calculate metric for recycled reactor, recycled ratio and enthalpy
         ratio = np.sum(F_recycle) / self.Ft0
-        Pi_feed = pd.Series(self.F0 / self.Ft0 * self.P0, index=self.comp_list)
-        Pi_gas_out = pd.Series(sim_profile[1:6, -1] / np.sum(sim_profile[1:6, -1]) * self.P0, index=self.comp_list)
-        num_comp = len(self.comp_list)
-        Tr_out = sim_profile[6, -1]
-        H_out, H_recycled, H_in, H_feed = np.zeros((4, num_comp))
-        for i in range(num_comp):
-            H_out[i] = PropsSI('HMOLAR', 'T', Tr_out, 'P', Pi_gas_out[i], self.comp_list[i]) \
-                if Pi_gas_out[i] != 0 else 0
-            H_feed[i] = PropsSI('HMOLAR', 'T', T_feed, 'P', Pi_feed[i], self.comp_list[i]) if Pi_feed[i] != 0 else 0
-            H_in[i] = PropsSI('HMOLAR', 'T', self.T0, 'P', Pi_feed[i], self.comp_list[i]) if Pi_feed[i] != 0 else 0
-            H_recycled[i] = PropsSI('HMOLAR', 'T', self.T0, 'P', Pi_gas_out[i], self.comp_list[i]) \
-                if Pi_gas_out[i] != 0 else 0
-        H_out_t = np.sum(H_out * sim_profile[1:6, -1])  # W
-        H_recycled_t = np.sum(H_recycled * sim_profile[1:6, -1])
-        H_in_t = np.sum(H_in * self.F0)  # W
-        H_feed_t = np.sum(H_feed * self.F0)
-        heat_duty = H_in_t - H_feed_t
-        heat_recycle = H_recycled_t - H_out_t
+        Tr_out = sim_profile[-6, -1]
+
+        cal = VLEThermo(self.comp_list)
+        H_out = cal.cal_H(Tr_out, self.P0, sim_profile[1:6, -1])  # kW
+        H_feed = cal.cal_H(T_feed, self.P0, self.F0)  # kW
+        H_in = cal.cal_H(self.T0, self.P0, self.F0)  # kW
+        H_recycled = cal.cal_H(self.T0, self.P0, sim_profile[1:6, -1])  # kW
+
+        heat_duty = H_in - H_feed
+        heat_recycle = H_recycled - H_out
         delta_H = heat_recycle + heat_duty
 
         p_metric = pd.Series([ratio, heat_recycle, heat_duty, delta_H],
@@ -369,40 +394,57 @@ class Simulation:
         :param rtol: relative tolerance of recycler calculation
         :return:
         """
+        if self.stage > 1:
+            raise ValueError('recycler does not support stage larger than 1!')
+
         # read the fresh feed and guess a recycle feed
         status = self.status
 
-        F_fresh, T_fresh = self.feed0_para['F0'], self.feed0_para['P0']
+        F_fresh, T_fresh = self.feed0_para['F0'], self.feed0_para['T0']
         P_in = self.P0
         F_re0, T_re0 = np.zeros_like(F_fresh), T_fresh
-        F_re0[:2] = F_fresh[:2] * 1.5
-        F_re0[2] = 0.5 * F_fresh[0] * (1 - 0.6) if status == 1 else 0
-        F_re0[3] = 0.5 * F_fresh[0] * (1 - 0.9) if status == 1 else 0  # 0
+        r_guess = -4/40*P_in+13
+        F_re0[:2] = F_fresh[:2] * 3 if status == 1 else F_fresh[:2] * r_guess
+        F_re0[2] = 0.5 * F_fresh[0] * (1 - 0.6) if status == 1 else 0.005 * F_fresh[0] * (1 - 0.8)
+        F_re0[3] = 0.5 * F_fresh[0] * (1 - 0.9) if status == 1 else 0.005 * F_fresh[0] * (1 - 0.8)  # 0
         F_re0[4] = F_fresh[0] * 2 * 0.15 if status == 1 else F_fresh[0] * 2 * 0.01
-        print(F_fresh, T_fresh)
+        # print(F_fresh, T_fresh)
         # update the recycle stream using Wegstein method
         # ref: Abrol, et. al, Computers & Chemical Engineering, 2012
         F_diff = 1e5
         while F_diff > rtol:
-            print(F_re0, T_re0)
-            F_in0, T_in0 = self.mixer(F_fresh, T_fresh, F_re0, T_re0, self.P0, self.comp_list)
-            print(F_in0, T_in0)
-            feed = pd.Series(np.array([T_in0, P_in, F_in0]), index=['T0', 'P0', 'F0'])
+            # Tr, Tc, P = y[-6], y[-5], y[-4]
+            # print(F_re0, T_re0)
+            F_in0, T_in0 = self.mixer_real(F_fresh, T_fresh, F_re0, T_re0, self.P0, self.comp_list)
+            # print(F_in0, T_in0)
+            feed = pd.Series([T_in0, P_in, F_in0], index=['T0', 'P0', 'F0'])
             res0 = self.one_pass(self.reactor_para.iloc[0], self.insulator.iloc[0], feed)
-            F_re_cal0 = res0[:, -1][1:6] * ratio
+            F_re_cal0 = res0[:, -1][1:6]  # * ratio
             if loop == 'direct':
-                T_re_cal0 = res0[:, -1][6] if status == 1 else self.T0  # self.T0  #
+                T_re_cal0 = res0[:, -1][-6] if status == 1 else self.T0  # self.T0  #
             elif loop == 'indirect':
                 T_re_cal0 = self.T0
-            F_re_cal0[2:4] = 0 if status == 0 else F_re_cal0[2:4]
+            if status == 0:
+                # separation through flash can
+                f_cal = VLEThermo(self.comp_list)
+                f_g, f_l, vf = f_cal.flash(T=40 + 273.15, P=P_in, x=F_re_cal0)
+                F_re_cal0 = np.array(f_g)*np.sum(F_re_cal0)*vf*ratio
+            else:
+                F_re_cal0[2:4] = F_re_cal0[2:4]
 
             F_re1, T_re1 = F_re_cal0, T_re_cal0
-            F_in1, T_in1 = self.mixer(F_fresh, T_fresh, F_re1, T_re1, self.P0, self.comp_list)
-            feed = pd.Series(np.array([T_in1, P_in, F_in1]), index=['T0', 'P0', 'F0'])
+            F_in1, T_in1 = self.mixer_real(F_fresh, T_fresh, F_re1, T_re1, self.P0, self.comp_list)
+            feed = pd.Series([T_in1, P_in, F_in1], index=['T0', 'P0', 'F0'])
             res1 = self.one_pass(self.reactor_para.iloc[0], self.insulator.iloc[0], feed)
-            F_re_cal1 = res1[:, -1][1:6] * ratio
-            T_re_cal1 = res1[:, -1][6] if status == 1 else self.T0  # self.T0  #
-            F_re_cal1[2:4] = 0 if status == 0 else F_re_cal1[2:4]
+            F_re_cal1 = res1[:, -1][1:6] #* ratio
+            T_re_cal1 = res1[:, -1][-6] if status == 1 else self.T0  # self.T0  #
+            if status == 0:
+                # separation through flash can
+                f_cal = VLEThermo(self.comp_list)
+                f_g, f_l, vf = f_cal.flash(T=40 + 273.15, P=P_in, x=F_re_cal1)
+                F_re_cal1 = np.array(f_g) * np.sum(F_re_cal1) * vf* ratio
+            else:
+                F_re_cal1[2:4] = F_re_cal0[2:4]
 
             # convergence criteria
             diff = np.abs(F_re_cal1 - F_re1) / F_re1
@@ -430,7 +472,7 @@ class Simulation:
             # F_in_temp, T_in_temp = self.mixer(F_fresh, T_fresh, F_re0, T_re0, self.P0, self.comp_list)
             # r_CO_CO2 = F_re0[4] / (F_re0[0] + F_fresh[0])
             # F_re0[4] = (F_re0[0] + F_fresh[0]) * 0.1 if r_CO_CO2 < 0.1 else F_re0[4]
-
+            print(F_diff)
         return res1, F_re_cal1
 
     def to_r(self, r_target):
@@ -445,7 +487,7 @@ class Simulation:
             self.reactors_para['L2'] = self.L[1] = self.reactor_para.iloc[1]['L'] = round(L0, 2)
             try:
                 res_profile = self.multi_reactor()
-            except (chemicals.exceptions.PhaseCountReducedError, AttributeError):
+            except (chemicals.exceptions.PhaseCountReducedError, AttributeError, ZeroDivisionError):
                 L0 *= 0.95
             r_metric = self.reactor_metric(res_profile)
             r_sim = r_metric['conversion']
@@ -487,11 +529,11 @@ class Simulation:
         if self.recycle == 1:
             res_profile, F_recycle = self.recycler(loop=loop, rtol=rtol)
             r_metric = self.reactor_metric(res_profile)
-            T_feed = res_profile[7, 1000 - 1] if self.stage == 2 else self.T_feed
+            T_feed = res_profile[-7, 1000 - 1] if self.stage == 2 else self.T_feed
             # calculate metric for recycled reactor
             p_conversion = pd.Series(r_metric["y_CH3OH"] / self.F0[0], index=["p_conversion"])
             p_metric = self.recycle_metric(res_profile, F_recycle, T_feed)
-            p_metric = p_metric.append(p_conversion)
+            p_metric = pd.concat([p_metric, p_conversion])
 
             metric = pd.concat([p_metric, r_metric])
             res_path = 'result/sim_recycle_%s_%s_%.2f_log.xlsx' % (ks, kn_model, rtol)
@@ -504,6 +546,7 @@ class Simulation:
 
         print("*" * 10)
         print(r_metric)
+
         # concat the input para with the performance metrics
         feed_cond = self.feed0_para
         res = pd.concat([self.reactors_para, self.insulators, feed_cond, metric])

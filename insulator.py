@@ -261,7 +261,7 @@ class Insulation:
 
                 # flash_comp, _ = vle_c.flash(P=P, mix=xi_h)
                 # xi_c = flash_comp.loc['V']
-                flash_comp, h_vl = vle_c.flash(T=Tc, P=P, x=xi_h.values)
+                flash_comp, _, _ = vle_c.flash(T=Tc, P=P, x=xi_h.values)
                 xi_c = pd.Series(flash_comp, index=self.comp_list)
 
                 qcv_delta = 1e5

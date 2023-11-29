@@ -576,6 +576,7 @@ class VLEThermo:
         liquid = CEOSLiquid(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw)
         flasher = FlashVL(self.const, self.cor, liquid=liquid, gas=gas)
         TP = flasher.flash(zs=frac, T=T, P=P * 1E5)
+        sf = TP.VF
         # print(frac)
         try:
             flasher_gas = TP.gas.zs
@@ -585,7 +586,7 @@ class VLEThermo:
             flasher_liq = TP.liquid0.zs
         except AttributeError:
             flasher_liq = None
-        return flasher_gas, flasher_liq
+        return flasher_gas, flasher_liq, sf
 
     def cal_Hlg(self, T, x):
         x = np.array(x)
