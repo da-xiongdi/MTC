@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -139,12 +141,10 @@ class Gibbs(VLEThermo):
                 select.to_excel(writer, index=True, header=True, sheet_name='select')
         return CO2_R, select
 
-    def series_reactor(self, feed_comp, T, P, r_target, sp_paras, sf_target=0.95):
+    def series_reactor(self, feed_cond, r_target, sp_paras, sf_target=0.95):
         """
         the combination of Gibbs reactor and separator
-        :param feed_comp: molar flow rate (pd.Series), mol/s
-        :param T: feed temperature, K
-        :param P: bar
+        :param feed_cond: dict(comp, Tin, Pin) molar flow rate (pd.Series), mol/s
         :param r_target: the target conversion of CO2 for whole process
         :param sp_paras: separator paras
         :param sf_target: separation ratio of each body
@@ -153,21 +153,23 @@ class Gibbs(VLEThermo):
 
         r_t = 0
         products, r_each = [], []
-        reactor_feed = feed_comp
+        reactor_feed = feed_cond['comp']
+        Tin, Pin = feed_cond['Tin'], feed_cond["Pin"]
         sep_work, dHrs, Ws = [], [], []
         Q, E = [], []
-        prods_liq = []
+        sep_liq, sep_gas = [], []  # separated product, separated unreacted gas
+
         while r_t < r_target:
             # print(reactor_feed.values)
-            product, _ = self.min_eq(T, P, reactor_feed)
+            product, _ = self.min_eq(Tin, Pin, reactor_feed)
             # metric of single reactor
-            dHr = self.cal_H(T, P, product) - self.cal_H(T, P, feed_comp.values)  # dH during reaction, kW
+            dHr = self.cal_H(Tin, Pin, product) - self.cal_H(Tin, Pin, reactor_feed.values)  # dH during reaction, kW
             dHrs.append(dHr)
             r = (reactor_feed[0] - product[0]) / reactor_feed[0]  # CO2 conversion
             r_each.append([r])
 
             # generate the feed for the next stage through separator
-            sp_feed_paras = [T, P, product]
+            sp_feed_paras = [Tin, Pin, product]
             sep_res = self.flash_sep(sp_feed_paras, sp_paras)
             reactor_feed = pd.Series(sep_res['gas'], index=self.comp)
             # reactor_feed, Q_diff, prod_CH4O = self.cond_sep(sp_feed_paras, sp_paras)
@@ -175,38 +177,113 @@ class Gibbs(VLEThermo):
             # metric of separator
             Q.append([sep_res['H_c'], sep_res['H_h']])
             E.append([sep_res['E_c'], sep_res['E_h']])
-            prods_liq.append(sep_res['liq'])
+            sep_liq.append(sep_res['liq'])
+            sep_gas.append(sep_res['gas'])
 
             # metric of the whole process
-            r_t = (feed_comp[0] - product[0]) / feed_comp[0]  # total conversion of CO2
-            s_t = (feed_comp[0] - product[0] - product[-1]) / (feed_comp[0] - product[0])  # selectivity of CH4O
+            r_t = (feed_cond['comp'][0] - product[0]) / feed_cond['comp'][0]  # total conversion of CO2
+            # selectivity of CH4O
+            s_t = (feed_cond['comp'][0] - product[0] - product[-1]) / (feed_cond['comp'][0] - product[0])
+
             products.append(product.tolist())
-        prods_CH4O = np.array(prods_liq)  # .reshape(len(prods_CH4O), 1)
+
+        process_metric = pd.Series([s_t, r_t], index=['s', 'r'])
+        sep_liq = np.array(sep_liq)  # .reshape(len(prods_CH4O), 1)
+        sep_gas = np.array(sep_gas)
+        dHrs = np.array(dHrs).reshape(len(dHrs), 1)
         Q, E = np.array(Q), np.array(E)
-        # print(Q.shape, E.shape, prods_CH4O.shape)
-        res = np.hstack((Q, E, prods_CH4O))
-        sim_metric = pd.DataFrame(res, columns=['H_c', 'H_h', 'E_c', 'E_h'] + self.comp.tolist())
+        res = np.hstack((dHrs, Q, E, sep_liq, sep_gas))
 
-        print(self.series_metric(sim_metric, r_t, s_t))
-        # r_qin_qs = 1 - abs((r_t * feed_comp[0] * 50) / np.sum(qs))
-        # sim_metric = pd.Series([r_t, s_t, np.sum(qs), np.sum(prods_CH4O), r_qin_qs],
-        #                        index=['r', 's', 'Q', 'Y_CH4O', 'rq_in_diff'])
+        # metric of each reactor
+        sim_metric = pd.DataFrame(res, columns=['Hrs', 'H_c', 'H_h', 'E_c', 'E_h'] +
+                                               [i + '_l' for i in self.comp.tolist()] +
+                                               [i + '_g' for i in self.comp.tolist()])
+        # metric of the whole process
+        process_metric = self.series_metric(feed_cond, sp_paras, sim_metric, process_metric)
+        return process_metric
 
-        return sim_metric  # /produced_CH4O  # , np.array(qconds)
+    @staticmethod
+    def save_res(sim_metric, feed_cond, sp_cond, sp_type):
+        res_path = f'res_Gibbs/{sp_type}_{datetime.now().date()}.xlsx'
 
-    def series_metric(self, stage_res, r, s):
+        res_save = pd.concat((pd.Series(feed_cond)[['Tin','Pin']], pd.Series(sp_cond), sim_metric))
+        res_save = pd.DataFrame(res_save.values.reshape(1, len(res_save)), columns=res_save.index.tolist())
+
+        try:
+            with pd.ExcelWriter(res_path, engine='openpyxl', mode='a', if_sheet_exists="overlay") as writer:
+                try:
+                    res_saved = pd.read_excel(res_path)
+                    res_save = pd.concat([res_saved, res_save], ignore_index=True)
+                    res_save.to_excel(writer, index=False, header=True)
+                except ValueError:
+                    res_save.to_excel(writer, index=False, header=True)
+        except FileNotFoundError:
+            res_save.to_excel(res_path, index=False, header=True)
+
+
+    @staticmethod
+    def energy_analysis(in_ma, prod_ma, left_ma, in_q, out_q, react_q):
         """
-        calculate the metric of series reactor with flash sep
-        :param stage_res: sim res of each stage(pd.Dataframe)
-        :param r: conversion of the whole process (float)
-        :param s: selectivity of the whole process (floate
+        perform enthalpy and exergy analysis of system
+        :param in_ma: input material, dict(T=Tin, P=Pin, x=feed)
+        :param prod_ma: product material
+        :param left_ma: unreacted material
+        :param in_q: input heat, [enthalpy, exergy]
+        :param out_q: output heat
+        :param react_q: reaction heat, float, minus for exothermic
         :return:
         """
-        energy_metric = stage_res[['H_c', 'H_h', "E_c", "E_h"]].sum()
-        yield_ch3oh = pd.Series(stage_res["Methanol"].sum(), index=['y_ch3oh'])
-        r_CH3OH_H2O = pd.Series(stage_res["Methanol"].sum() / stage_res["H2O"].sum(), index=['r_CH3OH_H2O'])
-        temp = pd.Series([r, s], index=['r', 's'])
-        metric = pd.concat((energy_metric, yield_ch3oh, r_CH3OH_H2O, temp))
+        metric = pd.Series(index=['H_in', 'E_in', 'H_o', 'E_o', 'H_l', 'E_l',
+                                  'H_qin', 'E_qin', 'H_qo', 'E_qo', 'H_r', "E_r"])
+        eos = VLEThermo(np.array(["CO2", "H2", "Methanol", "H2O", "carbon monoxide"]), ref='ev')
+
+        metric.loc[['H_o', 'E_o']] = 0
+        for prod in prod_ma:
+            metric.loc[['H_o', 'E_o']] += np.array([eos.cal_H(**prod), eos.cal_E(**prod)])
+        metric.loc[['H_in', 'E_in']] = [eos.cal_H(**in_ma), eos.cal_E(**in_ma)]
+        metric.loc[['H_l', 'E_l']] = [eos.cal_H(**left_ma), eos.cal_E(**left_ma)]
+        metric.loc[['H_qin', 'E_qin', 'H_qo', 'E_qo']] = in_q + out_q
+        metric.loc[['H_r', "E_r"]] = [react_q, react_q * (1 - 298.15 / in_ma['T'])]
+        # thermodynamic efficiency
+        metric['eta_e'] = (metric.loc['E_o'] + metric.loc['E_l'] + metric.loc['E_qo'] - metric.loc["E_r"]) / \
+                          (metric.loc['E_in'] + metric.loc['E_qin'])
+        metric['H_dev'] = ((metric.loc['H_o'] + metric.loc['H_l'] + metric.loc['H_qo'] - metric.loc['H_r']) -
+                           (metric.loc['H_in'] + metric.loc['H_qin'])) / (metric.loc['H_in'] + metric.loc['H_qin'])
+        return metric
+
+    def series_metric(self, feed_paras, sep_paras, stage_res, process_res):
+        """
+        calculate the metric of series reactor with flash sep
+        :param feed_paras: [Tin, Pin, feed] (dict)
+        :param sep_paras: condensation temperature (dict)
+        :param stage_res: sim res of each stage(pd.Dataframe)
+        :param process_res: conversion and selectivity of the whole process (pd.Series)
+        :return:
+        """
+        yield_ch3oh = pd.Series(stage_res["Methanol_l"].sum(), index=['y_ch3oh'])
+        r_CH3OH_H2O = pd.Series(stage_res["Methanol_l"].sum() / stage_res["H2O_l"].sum(), index=['r_CH3OH_H2O'])
+        # metric = pd.concat((energy_metric, yield_ch3oh, r_CH3OH_H2O, process_res))
+
+        # calculate the exergy
+        # generate the info of each material flow, including T,P,molar flow
+        Tin, Pin, feed = feed_paras['Tin'], feed_paras['Pin'], feed_paras['comp'].to_numpy()
+        Tc = sep_paras['Tc']
+        feed = dict(T=Tin, P=Pin, x=feed)
+        p_left = dict(T=Tin, P=Pin, x=stage_res.iloc[-1].filter(like='_g').to_numpy())
+        p_cond = []
+        for i in stage_res.filter(like='_l').to_numpy():
+            p_cond.append(dict(T=Tc, P=Pin, x=i))
+            # p_cond.append(dict(T=Tc, P=Pin, x=[0,0,i[2],i[3],0]))
+        # p_cond = [dict(T=Tc, P=Pin, x=np.array([0, 0, stage_res["Methanol_l"].sum(), stage_res["H2O_l"].sum(), 0]))]
+        # np.array([0, 0, stage_res["Methanol_l"].sum(), stage_res["H2O_l"].sum(), 0])
+
+        # perform energy analysis
+        reaction_energy = stage_res['Hrs'].sum()
+        energy_metric = self.energy_analysis(feed, p_cond, p_left,
+                                             stage_res[['H_h', 'E_h']].sum().abs().tolist(),
+                                             stage_res[['H_c', 'E_c']].sum().abs().tolist(),
+                                             reaction_energy)
+        metric = pd.concat((energy_metric, yield_ch3oh, r_CH3OH_H2O, process_res))
         return metric
 
     def ideal_sep(self, feed_paras, sep_paras):
@@ -217,15 +294,15 @@ class Gibbs(VLEThermo):
         """
         [Tin, Pin, feed] = feed_paras
         sp = sep_paras['sp']
-        prod_out = feed.copy()*sp
+        prod_out = feed.copy() * sp
         prod_out[[0, 1, -1]] = 0
-        feed_out = feed-prod_out
+        feed_out = feed - prod_out
 
         # metric of sep
         # released energy during sep, kW
         H = self.cal_H(Tin, Pin, prod_out) + self.cal_H(Tin, Pin, feed_out) - self.cal_H(Tin, Pin, feed)
         # released exergy during sep, kW
-        E = self.cal_E(Tin, Pin, prod_out) + self. cal_E(Tin, Pin, feed_out) - self.cal_E(Tin, Pin, feed)
+        E = self.cal_E(Tin, Pin, prod_out) + self.cal_E(Tin, Pin, feed_out) - self.cal_E(Tin, Pin, feed)
 
         res = dict(gas=feed_out, liq=prod_out, H_c=H, E_c=E)
         return res
@@ -393,7 +470,7 @@ def find_best_cond(feed, T_range, Din_range, Dd_range):
         for Din in Din_range:
             for Dd in Dd_range:
                 diffusor_para = dict(location=0, Din=Din, thick=Dd, Tc=Tc, heater=0)
-                gibbs_cal = Gibbs(in_gas.index)
+                gibbs_cal = Gibbs(feed.index)
                 res = gibbs_cal.series_reactor(feed, 503, 70, r_target=0.95, sp_paras=diffusor_para)
                 sims_res.iloc[i] = np.hstack((np.array([Tc, Din, Dd]), res))
                 print(sims_res.iloc[i])
@@ -404,15 +481,14 @@ def find_best_cond(feed, T_range, Din_range, Dd_range):
     sims_res.to_excel(path, index=True, header=True, sheet_name='conversion')
 
 
-def metric_single(feed, Tc, Din, Dd, r):
-    diffusor_para = dict(location=0, Din=Din, thick=Dd, Tc=Tc, heater=0)
-    gibbs_cal = Gibbs(feed.index)
-    res = gibbs_cal.series_reactor(feed, 503, 70, r_target=r, sp_paras=diffusor_para, sf_target=0.85)
+def metric_single(feed, r, sp_para):
+    gibbs_cal = Gibbs(feed['comp'].index)
+    res = gibbs_cal.series_reactor(feed, r_target=r, sp_paras=sp_para)
     return res
 
 
 if __name__ == '__main__':
-    in_gas = pd.Series([0.008154456, 0.024463369, 0, 0, 0], index=["CO2", "H2", "Methanol", "H2O", "carbon monoxide"])
+    in_comp = pd.Series([0.008154456, 0.024463369, 0, 0, 0], index=["CO2", "H2", "Methanol", "H2O", "carbon monoxide"])
     # 0.008154456, 0.024463369, 0, 0, 0
     # 0.00522348 0.01617213 0.00268013 0.00293098 0.00025085
     Tcs = np.arange(323, 403, 5)
@@ -420,8 +496,29 @@ if __name__ == '__main__':
     thick = np.arange(0.002, 0.014, 0.002)
 
     # find_best_cond(in_gas, Tcs, Dins, thick)
-    sim_res = metric_single(in_gas, Tc=353, Din=0.08, Dd=0.01, r=0.95)
-    print(sim_res)
-    print(sim_res[['H_c', 'H_h', "E_c", "E_h"]].sum())
+    in_gas = dict(comp=in_comp, Tin=503, Pin=70)
+    sp_para = dict(Tc=313)  # Din=0.08, Dd=0.01
+    sim_res = metric_single(in_gas, r=0.95, sp_para=sp_para)
+    # Gibbs.save_res(sim_res, in_gas, sp_para, 'flash')
 
     # metric_single()
+    # Tins, Pins = np.arange(483, 513, 5), np.arange(30, 80, 10)
+    # Tcs = np.arange(303, 353, 10)
+    # for Tc in Tcs:
+    #     for Tin in Tins:
+    #         for Pin in Pins:
+    #             in_gas = dict(comp=in_comp, Tin=Tin, Pin=Pin)
+    #             sp_para = dict(Tc=Tc)  # Din=0.08, Dd=0.01
+    #             sim_res = metric_single(in_gas, r=0.95, sp_para=sp_para)
+    #             print(sim_res)
+    #             Gibbs.save_res(sim_res, in_gas, sp_para, 'flash')
+
+    # calculate the metric at std
+    # cal = VLEThermo(comp=["CO2", "H2", "Methanol", "H2O", "carbon monoxide"], ref='ev')
+    # feed = np.array([1, 3, 0, 0, 0])
+    # product = np.array([0, 0, 1, 1, 0])
+    # T, P = 503, 70
+    # Hr = cal.cal_H(T, P, product) - cal.cal_H(T, P, feed)
+    # Er = cal.cal_E(T, P, product) - cal.cal_E(T, P, feed)
+    # eta_E = cal.cal_E(T, P, product)/cal.cal_E(T, P, feed)
+    # print(Hr, Er, eta_E)

@@ -319,7 +319,11 @@ class Simulation:
             F = np.array(y[:5])
             Tr, Tc, P = y[-6], y[-5], y[-4]
             # simulation of reactor
-            res_react = react_sim.balance(Tr, P, F)
+            try:
+                res_react = react_sim.balance(Tr, P, F)
+            except ValueError as e:
+                print(f'{e}: {Tr}_{P}_{F}')
+                exit(0)
             dP_dz = 0 if self.drop == 0 else react_sim.ergun(Tr, P, F) * 1e-5  # bar/m
             # convert reaction rate per length to per kg catalyst
             dl2dw = np.pi * ((Dt ** 2) / 4) * rhoc * phi

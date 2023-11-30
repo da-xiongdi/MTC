@@ -609,6 +609,18 @@ class VLEThermo:
         dH = gas.H() - TP.H()
         # print(frac)
         return dH
+
+    def cal_cp(self, T, P, x):
+        frac = x / np.sum(x)
+        gas = CEOSGas(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw, T=T, P=P * 1E5, zs=frac)
+        liquid = CEOSLiquid(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw)
+        flasher = FlashVL(self.const, self.cor, liquid=liquid, gas=gas)
+        TP_backward = flasher.flash(zs=frac, T=T - 1, P=P * 1E5)
+        # TP = flasher.flash(zs=frac, T=T, P=P * 1E5)
+        TP_forward = flasher.flash(zs=frac, T=T + 1, P=P * 1E5)
+        # print(frac)
+        return (TP_forward.H() - TP_backward.H()) / 2  # J/mol K
+
 # mixture_property(490, pd.Series([0.25, 0.75], index=['CO2', 'hydrogen']), 70)
 # tt = VLE(293, ["H2O"])
 # print(tt.phi(pd.Series([1], index=["H2O"]), 1, 1))

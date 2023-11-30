@@ -145,10 +145,11 @@ class Reaction:
 
         # convert the partial pressure from ndarray to pd.Series
         Pi = pd.Series(Pi, index=self.comp_list)
-        K_H2O = 96808*np.exp(-51979/8.314/T)
-        k_r = 11101.2*np.exp(-117432/8.314/T)
-        Ke = 1/np.exp(-12.11+5319/T+1.012*np.log(T)+1.144*10**(-4*T))
-        react_rate = k_r*(Pi["CO2"]-Pi["CO"]*Pi["H2O"]/Ke/Pi["H2"])/(1+K_H2O*Pi["H2O"]/Pi["H2"])*1000
+        K_H2O = 96808 * np.exp(-51979 / 8.314 / T)
+        k_r = 11101.2 * np.exp(-117432 / 8.314 / T)
+        Ke = 1 / np.exp(-12.11 + 5319 / T + 1.012 * np.log(T) + 1.144 * 10 ** (-4 * T))
+        react_rate = k_r * (Pi["CO2"] - Pi["CO"] * Pi["H2O"] / Ke / Pi["H2"]) / (
+                    1 + K_H2O * Pi["H2O"] / Pi["H2"]) * 1000
 
         react_comp_rate = np.zeros((3, 5))
         react_comp_rate[1] = react_rate * self.react_sto[1]
@@ -278,7 +279,7 @@ class Reaction:
             # vle_cal = VLE(T, self.comp_list)
             # phi, _ = vle_cal.phi(comp=pd.Series(xi, index=self.comp_list), P=P, phase=0)
             vle_cal = VLEThermo(self.comp_list)
-            phi = np.array(vle_cal.phi(T=T,P=P,x=xi))
+            phi = np.array(vle_cal.phi(T=T, P=P, x=xi))
         else:
             phi = 1
         v = self.v0 * (self.P0 / P) * (T / self.T0) * (Ft / self.Ft0)
@@ -305,6 +306,8 @@ class Reaction:
             # read the heat capacity for each component, J/(mol K)
             cp = PropsSI('CPMOLAR', 'T', T, 'P', Pi[i] * 1e5, self.comp_list[i]) if Pi[i] > 0 else 0
             heat_capacity += cp * F_dict[i]
+        # cal = VLEThermo(self.comp_list)
+        # heat_capacity = Ft * cal.cal_cp(T, P, xi)
         dT = dH * 1e3 / heat_capacity  # K/kg_cat
         res = {
             'mflux': dF_react[-1],
