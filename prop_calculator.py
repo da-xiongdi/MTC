@@ -7,7 +7,7 @@ import scipy.optimize as opt
 
 from thermo import (ChemicalConstantsPackage, SRKMIX, FlashVL, CEOSLiquid, CEOSGas, HeatCapacityGas,
                     FlashVLN)
-from thermo.unifac import DOUFSG, DOUFIP2016, UNIFAC
+# from thermo.unifac import DOUFSG, DOUFIP2016, UNIFAC
 
 warnings.filterwarnings('ignore')
 # T_gas = 200  # 310.93  # K
@@ -572,6 +572,15 @@ class VLEThermo:
         TP = flasher.flash(zs=frac, T=T, P=P * 1E5)
         # print(frac)
         return TP.phis()
+
+    def z(self, T, P, x):
+        frac = x / np.sum(x)
+        gas = CEOSGas(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw, T=T, P=P * 1e5, zs=frac)
+        liquid = CEOSLiquid(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw)
+        flasher = FlashVL(self.const, self.cor, liquid=liquid, gas=gas)
+        TP = flasher.flash(zs=frac, T=T, P=P * 1E5)
+        # print(frac)
+        return TP.Z()
 
     def flash(self, T, P, x):
         frac = x / np.sum(x)

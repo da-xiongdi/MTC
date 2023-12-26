@@ -2,7 +2,7 @@ import numpy as np
 from CoolProp.CoolProp import PropsSI
 import pandas as pd
 
-from prop_calculator import VLE, mixture_property, VLEThermo
+from prop_calculator import mixture_property, VLEThermo
 
 R = 8.314  # J/mol/K
 ks, vof = 0.2, 0.8 #0.2, 0.8  # 0.2 1.5 for 0.42 1 for 0.3 0.2 for 0.15 # 1, 0.4 for CO exp
@@ -39,6 +39,9 @@ class Reaction:
         self.P0, self.T0 = P0, T0  # P0 bar, T0 K
         self.F0, self.Ft0 = F0, np.sum(F0)
         self.v0 = self.Ft0 * self.R * self.T0 / (self.P0 * 1e5)
+
+        #
+        self.vle_cal = VLEThermo(self.comp_list)
 
     @staticmethod
     def react_H(T, in_dict):
@@ -98,16 +101,21 @@ class Reaction:
         """
         Ft = np.sum(F_dict)
         v = self.v0 * (self.P0 / P) * (T / self.T0) * (Ft / self.Ft0)
-        u = v / (np.pi * self.Dt ** 2 / 4)
+        a_e = self.Dt ** 2 / 4 if self.L == 0.5 else (self.Dt ** 2 - 0.02**2) / 4
+        u = v / (np.pi * a_e)
         if self.eos == 1:
-            properties = VLE(T, comp=self.comp_list)
-            _, z = properties.phi(pd.Series(F_dict / Ft, index=self.comp_list), P)
+            # properties = VLE(T, comp=self.comp_list)
+            # _, z = properties.phi(pd.Series(F_dict / Ft, index=self.comp_list), P)
+            # print(z)
+            z = np.array(self.vle_cal.z(T=T, P=P, x=F_dict))
+            # print(z)
         elif self.eos == 0:
             z = 1
-        gas_property = mixture_property(T, pd.Series(F_dict / Ft, index=self.comp_list), z, rho_only=False)
+        gas_property = mixture_property(T, pd.Series(F_dict / Ft, index=self.comp_list), P, z, rho_only=False)
         Re = self.ds * u * gas_property['rho'] / gas_property['vis'] / self.phi
         drop_per_length = - (150 / Re + 1.75) * self.phi / (1 - self.phi) ** 3 * (
                 gas_property['rho'] * u ** 2 / self.ds)  # Pa/m
+        # print(drop_per_length)
         return drop_per_length
 
     def convection(self, T, P, F_dict):
@@ -278,8 +286,8 @@ class Reaction:
             # fugacity coe, compression factor
             # vle_cal = VLE(T, self.comp_list)
             # phi, _ = vle_cal.phi(comp=pd.Series(xi, index=self.comp_list), P=P, phase=0)
-            vle_cal = VLEThermo(self.comp_list)
-            phi = np.array(vle_cal.phi(T=T, P=P, x=xi))
+            # vle_cal = VLEThermo(self.comp_list)
+            phi = np.array(self.vle_cal.phi(T=T, P=P, x=xi))
         else:
             phi = 1
         v = self.v0 * (self.P0 / P) * (T / self.T0) * (Ft / self.Ft0)

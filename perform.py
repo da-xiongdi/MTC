@@ -22,8 +22,8 @@ for i in range(feed_data.shape[0]):
         for k in range(insulator_data.shape[0]):
             # insulator_data['Din'].iloc[k] = reactor_data['Dt'].iloc[j]
             # sim = Simulation(reactor_data.iloc[j], chem_data, feed_data.iloc[i],
-            #                  insulator_data.iloc[k], eos=1, drop=0)
-            # sim.sim(save_profile=1, loop='indirect', rtol=0.01, r_target=None)
+            #                  insulator_data.iloc[k], eos=1, drop=1)
+            # sim.sim(save_profile=1, loop='indirect', rtol=0.0001, r_target=None)
             try:
                 sim = Simulation(reactor_data.iloc[j], chem_data, feed_data.iloc[i],
                                  insulator_data.iloc[k], eos=1, drop=0)
