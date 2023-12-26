@@ -501,18 +501,25 @@ class Simulation:
         if self.stage > 2:
             raise ValueError('stage > 2 is not supported with given conversion')
         # guess a length
-        L0, r_sim = 1.2, 0
-        # Din, Dd, Tc_in, heater = self.Din[1], self.insulators['Thick2'], self.Tc[1], self.heater[1]
-        # q_h = round((500 - Tc_in) / Dd * 0.2 * np.pi * Din * heater, 2)
-
+        L0 = 0.7 if self.reactors_para['Dt2'] > 0.06 else 2
+        r_sim = 0
+        L0_coe_pre, L0_coe = 1, 1
+        n_iter = 0
         while r_sim < r_target or r_sim > 1:
-            self.reactors_para['L2'] = self.L[1] = self.reactor_para.iloc[1]['L'] = round(L0, 2)
-            try:
-                res_profile = self.multi_reactor()
-            except (chemicals.exceptions.PhaseCountReducedError,
-                    AttributeError, ZeroDivisionError, OscillationError, ValueError) as e:
-                print(e)
-                L0 *= 0.95
+            while True:
+                self.reactors_para['L2'] = self.L[1] = self.reactor_para.iloc[1]['L'] = round(L0, 2)
+                try:
+                    res_profile = self.multi_reactor()
+                    # If the operation is successful, break out of the loop
+                    break
+                except (chemicals.exceptions.PhaseCountReducedError,
+                        AttributeError, ZeroDivisionError, OscillationError, ValueError) as e:
+                    # Print the caught exception
+                    print(e)
+                    # Adjust L0
+                    dL = L0 * 0.05
+                    L0 = L0 - max(dL, 0.01)
+
             r_metric = self.reactor_metric(res_profile)
             r_sim = r_metric['conversion']
             print(r_sim)
@@ -521,31 +528,48 @@ class Simulation:
                 # print(f"ValueError: 'too low r too long reactor!':{r_sim:.2f}_{L0:.2f}")
                 return res_profile
                 # raise ValueError(f"{RED}ValueError: 'too low r too long reactor!':{r_sim:.2f}_{L0:.2f}{ENDC}")
-            if res_profile[-6, -1] < 460:
+            if res_profile[-6, -1] < 443:
                 return res_profile
                 # print(f"ValueError: 'too low heater!':{r_sim:.2f}_{L0:.2f}_{res_profile[-6, -1]:.2f}")
                 # raise ValueError(f'{RED}too low heater!:{r_sim:.2f}_{L0:.2f}_{res_profile[-6, -1]:.2f}{ENDC}')
+            if n_iter > 20:
+                return res_profile
+            try:
+                To = res_profile[-6, -1]
+            except UnboundLocalError:
+                To = 483
 
             if r_sim < 0.4:
-                L0 *= (r_target / r_sim * 1.3)  # if q_h <= 500 else (r_target / r_sim * 1.2)
+                L0_coe = (r_target / r_sim * 2) if To <= 463 else (r_target / r_sim * 1.2)
             elif 0.4 <= r_sim < 0.6:
-                L0 *= (r_target / r_sim * 1.2)  # if q_h <= 500 else (r_target / r_sim * 1.1)
+                L0_coe = (r_target / r_sim * 1.5) if To <= 463 else (r_target / r_sim * 1.1)
             elif 0.6 <= r_sim < 0.7:
-                L0 *= (r_target / r_sim * 1.1)  # if q_h <= 500 else (r_target / r_sim * 1.05)
+                L0_coe = (r_target / r_sim * 1.3) if To <= 463 else (r_target / r_sim * 1.05)
             elif 0.7 <= r_sim < 0.8:
-                L0 *= (r_target / r_sim * 1.04)
+                L0_coe = (r_target / r_sim * 1.04)  # - n_iter * 0.1
             elif 0.8 <= r_sim < 0.9:
-                L0 *= (r_target / r_sim * 1.02)
-            elif 0.9 <= r_sim < 1:
-                L0 += max((r_target / r_sim - 1) * L0,
-                          0.01)  # if q_h >= 800 else max((r_target / r_sim - 1) * L0, 0.05)
+                dL = ((r_target / r_sim * 1.02) * L0 - L0) if To <= 463 else ((r_target / r_sim * 0.9) * L0 - L0)
+                L0 = L0 + dL if dL > 0.02 else L0 + 0.02
+            elif 0.9 <= r_sim < 0.94:
+                if To <= 463:
+                    L0 *= (r_target / r_sim * 1.02)
+                else:
+                    L0 += 0.04
+                # L0 -= n_iter*0.04
+            elif 0.94 <= r_sim < 1:
+                L0 += max((r_target / r_sim - 1) * L0, 0.05) if To <= 463 else max((r_target / r_sim - 1) * L0, 0.01)
             elif r_sim > 1:
-                L0 -= 0.4
+                L0 *= 0.9
                 print('too long reactor too overlarge r!')
                 # raise Warning('too long reactor too overlarge r!')
             else:
                 pass
-
+            if r_sim < 0.8:
+                dL = (L0_coe - 1) * L0
+                if n_iter % 3 == 0:
+                    dL = max(dL * 0.9, 0.1)
+                L0 = L0 + dL
+            n_iter += 1
         return res_profile
 
     def sim(self, save_profile=0, loop='direct', rtol=0.05, r_target=None):
