@@ -3,6 +3,7 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from CoolProp.CoolProp import PropsSI
 from scipy.optimize import minimize
 from scipy.integrate import solve_ivp
 from prop_calculator import VLEThermo
@@ -141,13 +142,13 @@ class Gibbs(VLEThermo):
                 select.to_excel(writer, index=True, header=True, sheet_name='select')
         return CO2_R, select
 
-    def series_reactor(self, feed_cond, r_target, sp_paras, sf_target=0.95):
+    def series_reactor(self, feed_cond, r_target, sp_paras, sp_type):
         """
         the combination of Gibbs reactor and separator
         :param feed_cond: dict(comp, Tin, Pin) molar flow rate (pd.Series), mol/s
         :param r_target: the target conversion of CO2 for whole process
         :param sp_paras: separator paras
-        :param sf_target: separation ratio of each body
+        :param sp_type: type of separator, flash, diff
         :return: product in each stage
         """
 
@@ -170,7 +171,8 @@ class Gibbs(VLEThermo):
 
             # generate the feed for the next stage through separator
             sp_feed_paras = [Tin, Pin, product]
-            sep_res = self.flash_sep(sp_feed_paras, sp_paras)
+            sep_res = self.flash_sep(sp_feed_paras, sp_paras) if sp_type == 'flash' \
+                else self.cond_sep(sp_feed_paras, sp_paras)
             reactor_feed = pd.Series(sep_res['gas'], index=self.comp)
             # reactor_feed, Q_diff, prod_CH4O = self.cond_sep(sp_feed_paras, sp_paras)
 
@@ -206,7 +208,7 @@ class Gibbs(VLEThermo):
     def save_res(sim_metric, feed_cond, sp_cond, sp_type):
         res_path = f'res_Gibbs/{sp_type}_{datetime.now().date()}.xlsx'
 
-        res_save = pd.concat((pd.Series(feed_cond)[['Tin','Pin']], pd.Series(sp_cond), sim_metric))
+        res_save = pd.concat((pd.Series(feed_cond)[['Tin', 'Pin']], pd.Series(sp_cond), sim_metric))
         res_save = pd.DataFrame(res_save.values.reshape(1, len(res_save)), columns=res_save.index.tolist())
 
         try:
@@ -219,7 +221,6 @@ class Gibbs(VLEThermo):
                     res_save.to_excel(writer, index=False, header=True)
         except FileNotFoundError:
             res_save.to_excel(res_path, index=False, header=True)
-
 
     @staticmethod
     def energy_analysis(in_ma, prod_ma, left_ma, in_q, out_q, react_q):
@@ -335,24 +336,60 @@ class Gibbs(VLEThermo):
         :param sep_paras: separator paras location=0, Din=Din, thick=Dd, Tc=Tc, heater=0
         :return:
         """
-        feed_comp = feed_paras[2]  # mol/s
-        # print(feed_comp)
-        reactor_feed = pd.Series(feed_comp.copy(), index=self.comp)
-        q, n = self.diffusion(feed_paras, **sep_paras)  # W/m mol/s m
-        r_H2O_CH3OH = n[3] / n[2]
-        # print(r_H2O_CH3OH, n)
-        r_h_CH3OH = q / n[2]  # J/mol
-        N_CH3OH = feed_comp[3] / r_H2O_CH3OH  # separated CH3OH, mol/s
-        Q = r_h_CH3OH * N_CH3OH / 1000  # diffused heat, kW
+        [Tin, Pin, feed] = feed_paras
+        Tc = sep_paras['Tc']
 
-        reactor_feed[3] = 0
-        reactor_feed[2] = reactor_feed[2] - N_CH3OH
-        # print(reactor_feed.values)
+        res = self.diffusion(feed_paras, **sep_paras)  # W/m mol/s m
+        m_diff = res['mflux']
+        q_sen, q_lat = res['hflux'], res['hlg']
+        l = min(feed[2] / m_diff[2], feed[3] / m_diff[3], key=abs)
 
-        if reactor_feed[2] < 0:
-            raise ValueError('Gas flow should be positive!')
+        N_CH3OH = l * m_diff[2]  # separated CH3OH, mol/s
+        N_H2O = l * m_diff[3]  # separated H2O, mol/s
+        # print(N_H2O, N_CH3OH)
+        # diffused sensible heat, kW
+        # r_F =
+
+        Q_sen = q_sen / m_diff[2] * N_CH3OH / 1000  # * (np.sum(feed[[0, 1, -1]] / np.sum(feed)))
+        # Q_lat = q_lat / m_diff[2] * N_CH3OH / 1000
+        Q_lat = (PropsSI('HMOLAR', 'T', Tc, 'Q', 1, 'water') -
+                 PropsSI('HMOLAR', 'T', Tc, 'Q', 0, 'water')) * N_H2O / 1000 + \
+                (PropsSI('HMOLAR', 'T', Tc, 'Q', 1, 'Methanol') -
+                 PropsSI('HMOLAR', 'T', Tc, 'Q', 0, 'Methanol')) * N_CH3OH / 1000  # kW
+
+        # print(Q_sen)
+        # print(Q_lat)
+        # diffused latent heat, kW
+        liq_out = np.array([0, 0, N_CH3OH, N_H2O, 0])
+        gas_out = feed - liq_out
+        gas_out[np.abs(gas_out) < 1e-10] = 0
+        Q_mix = self.cal_H(Tc, Pin, liq_out) - \
+                self.cal_H(Tc, Pin, np.array([0, 0, N_CH3OH, 0, 0])) - \
+                self.cal_H(Tc, Pin, np.array([0, 0, 0, N_H2O, 0]))
+        # print(Q_lat, Q_mix)
+        # Q_lat = Q_lat - Q_mix
+        # metric of sep
+
+        H_c = Q_lat + Q_sen  # released energy during sep, kW
+        E_c = (Q_lat + Q_sen) * (1 - 298.15 / Tc)  # released exergy during sep, kW
+
+        # eos = VLEThermo(comp=self.comp, ref='ev')
+        # H_h = eos.cal_H(Tin, Pin, feed) - eos.cal_H(Tin, Pin, gas_out) - eos.cal_H(Tc, Pin, liq_out) - Q_lat
+        # H_h = eos.cal_H(Tin, Pin, liq_out) - eos.cal_H(Tc, Pin, liq_out) - Q_lat
+
+        # print(eos.cal_H(Tin, Pin, Ff), eos.cal_H(Tin, Pin, Fr), eos.cal_H(Tc, Pin, Fp), Q_lat)
+        # print(H_h, Q_sen)
+        # Q_sen_p = self.cal_H(Tin, Pin, Fp) - self.cal_H(Tc, Pin, Fp) - Q_lat
+        # print(Q_sen_p)
+        H_h = Q_sen  # required energy during sep, kW
+        E_h = H_h * (1 - 298.15 / Tin)  # required exergy during sep, kW
+
+        res = dict(gas=gas_out, liq=liq_out, H_c=H_c, E_c=E_c, E_h=E_h, H_h=H_h)
+
+        if np.any(liq_out) >= 0:
+            return res
         else:
-            return reactor_feed, Q, N_CH3OH
+            raise ValueError('Gas flow should be positive!')
 
     def cond_sep_along(self, feed_paras, sep_paras, r_target):
         """
@@ -405,7 +442,7 @@ class Gibbs(VLEThermo):
               self.cal_G(Tos[0], Pos[0], Fo_feed.values) - self.cal_G(Tos[1], Pos[1], Fo_prod.values)
 
     @staticmethod
-    def diffusion(feed, location, Din, thick, Tc, heater):
+    def diffusion(feed, location, Din, thick, Tc):
         """
 
         :param feed: [T0, P0, F0: mol/s(ndarray)]
@@ -416,7 +453,6 @@ class Gibbs(VLEThermo):
         :param heater:
         :return:
         """
-
         [T0, P0, F0] = feed
         Do = Din + thick * 2
         # property_feed = mixture_property(T0, xi_gas=pd.Series(F0 / np.sum(F0), index=subs), Pt=P0)
@@ -424,7 +460,7 @@ class Gibbs(VLEThermo):
         res = insula_sim.flux(T0, P0, F0, Tc)  # mol/(s m) W/m
         h_diff, m_diff = res['hflux'], res['mflux']
         # r_h_m = h_diff / 1e3 / (m_diff[2])  # kJ/mol CH4O
-        return h_diff, m_diff  # W/m, mol/(s m)
+        return res  # h_diff, m_diff  # W/m, mol/(s m)
 
     @staticmethod
     def diff_along(feed, L, location, Din, thick, Tc, heater):
@@ -482,8 +518,8 @@ def find_best_cond(feed, T_range, Din_range, Dd_range):
 
 
 def metric_single(feed, r, sp_para):
-    gibbs_cal = Gibbs(feed['comp'].index)
-    res = gibbs_cal.series_reactor(feed, r_target=r, sp_paras=sp_para)
+    gibbs_cal = Gibbs(feed['comp'].index, ref='ch')
+    res = gibbs_cal.series_reactor(feed, r_target=r, sp_paras=sp_para, sp_type='diff')
     return res
 
 
@@ -491,27 +527,33 @@ if __name__ == '__main__':
     in_comp = pd.Series([0.008154456, 0.024463369, 0, 0, 0], index=["CO2", "H2", "Methanol", "H2O", "carbon monoxide"])
     # 0.008154456, 0.024463369, 0, 0, 0
     # 0.00522348 0.01617213 0.00268013 0.00293098 0.00025085
-    Tcs = np.arange(323, 403, 5)
-    Dins = np.arange(0.02, 0.08, 0.01)
+    # Tcs = np.arange(323, 403, 5)
+    Dins = np.arange(0.04, 0.09, 0.01)
     thick = np.arange(0.002, 0.014, 0.002)
 
     # find_best_cond(in_gas, Tcs, Dins, thick)
-    in_gas = dict(comp=in_comp, Tin=503, Pin=70)
-    sp_para = dict(Tc=313)  # Din=0.08, Dd=0.01
-    sim_res = metric_single(in_gas, r=0.95, sp_para=sp_para)
-    # Gibbs.save_res(sim_res, in_gas, sp_para, 'flash')
+    # in_gas = dict(comp=in_comp, Tin=503, Pin=70)
+    # # sp_para = dict(Tc=353)  # Din=0.08, Dd=0.01
+    # sp_para = dict(Tc=353, location=0, Din=0.05, thick=0.005)
+    # sim_res = metric_single(in_gas, r=0.95, sp_para=sp_para)
+    # print(sim_res)
+    # Gibbs.save_res(sim_res, in_gas, sp_para, 'diff')
 
     # metric_single()
     # Tins, Pins = np.arange(483, 513, 5), np.arange(30, 80, 10)
-    # Tcs = np.arange(303, 353, 10)
-    # for Tc in Tcs:
-    #     for Tin in Tins:
-    #         for Pin in Pins:
-    #             in_gas = dict(comp=in_comp, Tin=Tin, Pin=Pin)
-    #             sp_para = dict(Tc=Tc)  # Din=0.08, Dd=0.01
-    #             sim_res = metric_single(in_gas, r=0.95, sp_para=sp_para)
-    #             print(sim_res)
-    #             Gibbs.save_res(sim_res, in_gas, sp_para, 'flash')
+    Tcs = np.arange(323, 393, 10)
+    for Tc in Tcs:
+        for Din in Dins:
+            for Dd in thick:
+                try:
+                    in_gas = dict(comp=in_comp, Tin=503, Pin=70)
+                    # sp_para = dict(Tc=Tc)  # Din=0.08, Dd=0.01
+                    sp_para = dict(Tc=Tc, location=1, Din=Din, thick=Dd)
+                    sim_res = metric_single(in_gas, r=0.95, sp_para=sp_para)
+                    print(sim_res)
+                    # Gibbs.save_res(sim_res, in_gas, sp_para, 'diff')
+                except AttributeError:
+                    pass
 
     # calculate the metric at std
     # cal = VLEThermo(comp=["CO2", "H2", "Methanol", "H2O", "carbon monoxide"], ref='ev')

@@ -6,7 +6,7 @@ from CoolProp.CoolProp import PropsSI
 import scipy.optimize as opt
 
 from thermo import (ChemicalConstantsPackage, SRKMIX, FlashVL, CEOSLiquid, CEOSGas, HeatCapacityGas,
-                    GibbsExcessLiquid, MSRKMIX, SRKMIXTranslated, SRK, IAPWS95Liquid)
+                    FlashVLN)
 from thermo.unifac import DOUFSG, DOUFIP2016, UNIFAC
 
 warnings.filterwarnings('ignore')
@@ -25,8 +25,10 @@ def mixture_property(T, xi_gas, Pt, z=1, rho_only=False):
     :return: thermal conductivity W/(m K), viscosity Pa s, heat capacity J/mol/K; pd.series
     """
     # prepare data for calculation
+    new_index = ['CO' if i == 'carbon monoxide' else i for i in xi_gas.index.tolist()]
+    xi_gas.index = new_index
     n = len(xi_gas.index)  # number of gas species
-
+    xi_gas = xi_gas/xi_gas.sum()
     [cp, k, vis, M, rho] = np.ones((5, n)) * 1e-5
     pi_gas = xi_gas * Pt * 1e5  # convert bar to pa
     Ti_sat = pd.Series(np.ones(n) * 100, index=xi_gas.index)
@@ -559,6 +561,7 @@ class VLEThermo:
         try:
             return flasher.flash(zs=frac, T=T, VF=0).P / 1E5
         except UnboundLocalError:
+            print('no bubble point')
             return 15e5
 
     def phi(self, T, P, x):
@@ -574,17 +577,20 @@ class VLEThermo:
         frac = x / np.sum(x)
         gas = CEOSGas(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw, T=T, P=P * 1E5, zs=frac)
         liquid = CEOSLiquid(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw)
-        flasher = FlashVL(self.const, self.cor, liquid=liquid, gas=gas)
+        flasher = FlashVLN(self.const, self.cor, liquids=[liquid,liquid], gas=gas)
         TP = flasher.flash(zs=frac, T=T, P=P * 1E5)
+        P_b = self.p_bub(T, x)
         sf = TP.VF
-        # print(frac)
         try:
             flasher_gas = TP.gas.zs
-        except AttributeError:
-            flasher_gas = None
+        except AttributeError as e:
+            print(e)
+            flasher_gas = None if P > P_b else TP.liquid1.zs
+            sf = 0 if P > P_b else TP.liquids_betas[1]
         try:
             flasher_liq = TP.liquid0.zs
-        except AttributeError:
+        except AttributeError as e:
+            print(e)
             flasher_liq = None
         return flasher_gas, flasher_liq, sf
 

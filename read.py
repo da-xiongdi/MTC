@@ -90,7 +90,7 @@ class ReadData:
     def insulator_data(self):
         stage = self.react_para['stage']
 
-        paras_stage = ['Din', 'Thick', 'Tc', 'qm', 'heater']
+        paras_stage = ['Din', 'Thick', 'Tc', 'qmc', 'Th',  'qmh']
         paras_array = {'status': [0 if i == 'off' else 1 for i in self.insulator_para['status']],
                        'pattern': self.insulator_para["pattern"]}
         paras_array_name = {'status_name': [f'status{n + 1}' for n in range(stage)],
@@ -137,10 +137,12 @@ class ReadData:
             for thick in paras_array_comb['Thick']:
                 thick = [round(k, 3) for k in thick]
                 for Tc in paras_array_comb['Tc']:
-                    for qm in paras_array_comb['qm']:
-                        for heater in paras_array_comb['heater']:
-                            insulator_para.iloc[i] = paras_array['status'] + paras_array['pattern'] + Din + thick + Tc \
-                                                     + qm + [round(k, 2) for k in heater] + [location, nit, q]
+                    for qmc in paras_array_comb['qmc']:
+                        for Th in paras_array_comb['Th']:
+                            for qmh in paras_array_comb['qmh']:
+                                insulator_para.iloc[i] = paras_array['status'] + paras_array['pattern'] + \
+                                                         Din + thick + \
+                                                         Tc + qmc + Th + qmh + [location, nit, q]
                             i += 1
         return insulator_para
 
