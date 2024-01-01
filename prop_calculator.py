@@ -44,10 +44,13 @@ def mixture_property(T, xi_gas, Pt, z=1, rho_only=False):
             Ti_sat['H2O'] = 300
     i = 0
     for comp in xi_gas.index:
-        M[i] = PropsSI('MOLARMASS', 'T', T, 'P', 1e5, comp)  # molar weight, g/mol
+        M[i] = PropsSI('MOLARMASS', 'T', T, 'P', 1e5, comp)  # molar weight, kg/mol
         i += 1
-    M_m = np.sum(M * xi_gas)  # molar weight of mixture
-    rho_m = Pt * 1E5 * M_m / 1000 / (z * R * T)  # kg/m3 np.sum(rho)
+
+    M_m = np.sum(M * xi_gas)  # molar weight of mixture, kg/mol
+    # print(M_m)
+    rho_m = Pt * 1E5 * M_m / (z * R * T)  # kg/m3 np.sum(rho)
+    # print(rho_m/M_m)
     if rho_only:
         return pd.Series([0, 0, rho_m, cp[2], cp[3], 0],
                          index=["k", "vis", 'rho', 'cp_' + xi_gas.index[2], 'cp_' + xi_gas.index[3], "cp_m"])
@@ -92,8 +95,8 @@ def mixture_property(T, xi_gas, Pt, z=1, rho_only=False):
             denominator[i, j] = xi_gas[j] * phi[i, j]  # if i != j else 0
         vis_m += xi_gas[i] * vis[i] / np.sum(denominator[i])
         k_m += xi_gas[i] * k[i] / np.sum(denominator[i])
-    return pd.Series([k_m, vis_m, rho_m, cp[2], cp[3], cp_m],
-                     index=["k", "vis", 'rho', 'cp_' + xi_gas.index[2], 'cp_' + xi_gas.index[3], "cp_m"])
+    return pd.Series([k_m, vis_m, rho_m, cp[2], cp[3], cp_m, M_m],
+                     index=["k", "vis", 'rho', 'cp_' + xi_gas.index[2], 'cp_' + xi_gas.index[3], "cp_m", "M"])
 
 
 class VLE:

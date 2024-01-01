@@ -75,26 +75,26 @@ class Insulation:
         [T1, x_c1, x_d1, r1] = inner_cond
         [T2, x_c2, x_d2, r2] = outer_cond
 
-        D_bi = self.bi_md((T1 + T2) / 2, P / 1e5)
-
-        D_31, D_32 = D_bi[0, 0], D_bi[0, 1]
-        D_41, D_42 = D_bi[1, 0], D_bi[1, 1]
-        D_cm_id = 1 / (0.25 / D_31 + 0.75 / D_32)
-        D_dm_id = 1 / (0.25 / D_41 + 0.75 / D_42)
+        # D_bi = self.bi_md((T1 + T2) / 2, P / 1e5)
+        #
+        # D_31, D_32 = D_bi[0, 0], D_bi[0, 1]
+        # D_41, D_42 = D_bi[1, 0], D_bi[1, 1]
+        # D_cm_id = 1 / (0.25 / D_31 + 0.75 / D_32)
+        # D_dm_id = 1 / (0.25 / D_41 + 0.75 / D_42)
         # print(self.bi_md((T1 + T2) / 2, P / 1e5))
 
         # print(D_bi)
-        # D_bi = self.bi_diff((T1 + T2) / 2, P / 1e5)
-        # if "CO2" in x_main.index:
-        #     D_31, D_32 = D_bi[2, 0], D_bi[2, 1]
-        #     D_41, D_42 = D_bi[3, 0], D_bi[3, 1]
-        #     D_cm_id = 1 / (0.25 / D_31 + 0.75 / D_32)
-        #     D_dm_id = 1 / (0.25 / D_41 + 0.75 / D_42)
-        # elif "CO" in x_main.index:
-        #     D_31, D_32 = D_bi[2, -1], D_bi[2, 1]
-        #     D_41, D_42 = D_bi[3, -1], D_bi[3, 1]
-        #     D_cm_id = 1 / (0.3 / D_31 + 0.7 / D_32)
-        #     D_dm_id = 1 / (0.3 / D_41 + 0.7 / D_42)
+        D_bi = self.bi_diff((T1 + T2) / 2, P / 1e5)
+        if "CO2" in x_main.index:
+            D_31, D_32 = D_bi[2, 0], D_bi[2, 1]
+            D_41, D_42 = D_bi[3, 0], D_bi[3, 1]
+            D_cm_id = 1 / (0.25 / D_31 + 0.75 / D_32)
+            D_dm_id = 1 / (0.25 / D_41 + 0.75 / D_42)
+        elif "CO" in x_main.index:
+            D_31, D_32 = D_bi[2, -1], D_bi[2, 1]
+            D_41, D_42 = D_bi[3, -1], D_bi[3, 1]
+            D_cm_id = 1 / (0.3 / D_31 + 0.7 / D_32)
+            D_dm_id = 1 / (0.3 / D_41 + 0.7 / D_42)
 
         Nc_i = -(2 * P / R / (T2 + T1)) * D_cm_id * (x_c1 - x_c2) / (r1 - r2)
         Nd_i = -(2 * P / R / (T2 + T1)) * D_dm_id * (x_d1 - x_d2) / (r1 - r2)
@@ -172,6 +172,25 @@ class Insulation:
 
         return ysol
 
+    def Rh_d_pre(self, Th, P, F_dict, Tc):
+        """
+        estimate the heat resistance of catalytic layer
+        :param Th:
+        :param P:
+        :param F_dict:
+        :param Tc:
+        :return:
+        """
+        Ft = np.sum(F_dict)
+        # insulator parameter
+        radium = [self.Din / 2, self.Do / 2]
+        xi_h = pd.Series(F_dict / Ft, index=self.comp_list)
+        mix_pro_ave = mixture_property((Tc + Th) / 2, xi_h, P)  # rho is not used, hence z=1 is used
+        k_e = mix_pro_ave["k"] * vof + ks * (1 - vof)  # effective heat conductivity of the insulator
+        # heat conduction along the insulator
+        Rh_d = np.log(radium[1 - self.location] / radium[self.location])/(2*np.pi*k_e)
+        return Rh_d
+
     def flux(self, Th, P, F_dict, Tc):
         """
         calculate the diffusional flux
@@ -188,7 +207,6 @@ class Insulation:
         # insulator parameter
         radium = [self.Din / 2, self.Do / 2]
         # calculate the molar fraction of the mix
-        # print(F_dict)
         xi_h = pd.Series(F_dict / Ft, index=self.comp_list)
         Pi_h = xi_h * P
         P_sat_CH3OH = PropsSI('P', 'T', Tc, 'Q', 1, "Methanol") * 1e-5
@@ -209,12 +227,10 @@ class Insulation:
 
             if Pi_h[diff_spec + 2] < P_sat[diff_spec]:
                 # condensation does not occur
-                Tw = Th - 0.1
-                mix_pro_ave = mixture_property((Tc + Tw) / 2, xi_h, P)  # rho is not used, hence z=1 is used
+                mix_pro_ave = mixture_property((Tc + Th) / 2, xi_h, P)  # rho is not used, hence z=1 is used
                 k_e = mix_pro_ave["k"] * vof + ks * (1 - vof)  # effective heat conductivity of the insulator
                 # heat conduction along the insulator
-                qcv_cond = -2 * np.pi * k_e * (Tc - Tw) / np.log(
-                    radium[1 - self.location] / radium[self.location])
+                qcv_cond = -2 * np.pi * k_e * (Tc - Th) / np.log(radium[1 - self.location] / radium[self.location])
                 property_h = mixture_property(Th, xi_h, P)  # rho is not used, hence z=1 is used
                 dT = qcv_cond / Ft / property_h["cp_m"]
                 # dT = -dT if self.location == 0 else dT
@@ -262,22 +278,14 @@ class Insulation:
             P_dew = vle_c.p_dew(Tc, xi_h.values)
 
             if P < P_dew:
-                qcv_delta = 1e5
-                Tw = Th - 0.1
-                while qcv_delta > 20:
-                    # condensation does not occur
-                    # gas properties inside the insulator
-                    mix_pro_ave = mixture_property((Tc + Tw) / 2, xi_h, P)  # rho is not used, hence z=1 is used
-                    k_e = mix_pro_ave["k"] * vof + ks * (
-                            1 - vof)  # effective heat conductivity of the insulator
+                # condensation does not occur
+                # gas properties inside the insulator
+                mix_pro_ave = mixture_property((Tc + Th) / 2, xi_h, P)  # rho is not used, hence z=1 is used
+                k_e = mix_pro_ave["k"] * vof + ks * (1 - vof)  # effective heat conductivity of the insulator
 
-                    # heat conduction along the insulator
-                    qcv_cond = -2 * np.pi * k_e * (Tc - Tw) / np.log(
-                        radium[1 - self.location] / radium[self.location])
-                    # heat convection inside the reactor
-                    # qcv_conv = -self.convection(Th, P, F_dict) * radium[self.location] * 2 * np.pi * (Tw - Th)
-                    qcv_delta = 5  # abs(qcv_cond - qcv_conv)
-                    Tw -= 1
+                # heat conduction along the insulator
+                qcv_cond = -2 * np.pi * k_e * (Tc - Th) / np.log(radium[1 - self.location] / radium[self.location])
+
                 # temperature variation inside the reactor
                 property_h = mixture_property(Th, xi_h, P)  # rho is not used, hence z=1 is used
                 dT = qcv_cond / Ft / property_h["cp_m"]
@@ -293,35 +301,26 @@ class Insulation:
                 flash_comp, _, _ = vle_c.flash(T=Tc, P=P, x=xi_h.values)
                 xi_c = pd.Series(flash_comp, index=self.comp_list)
 
-                qcv_delta = 1e5
-                Tw = Th - 0.1
-                while qcv_delta > 20:
-                    # gas properties inside the insulator
-                    property_c = mixture_property(Tc, xi_c, P)
-                    property_w = mixture_property(Tw, xi_h, P)
-                    mix_pro_ave = (property_w + property_c) / 2
-                    k_e = mix_pro_ave["k"] * vof + ks * (
-                            1 - vof)  # effective heat conductivity of the insulator
-                    # calculate the diffusional flux inside the insulator
-                    cold_cond = [Tc, xi_c["Methanol"], xi_c["H2O"], radium[1 - self.location]]
-                    hot_cond = [Th, xi_h["Methanol"], xi_h["H2O"], radium[self.location]]
-                    cond_list = [hot_cond, cold_cond]
-                    cal_property = [mix_pro_ave["cp_Methanol"], mix_pro_ave["cp_H2O"], k_e]
-                    # [xc, xd, Nc,Nd, T, dTdz]
-                    ode_res = self.ode_multi(xi_h, cond_list[self.location], cond_list[self.location - 1], P,
-                                             cal_property)
+                # gas properties inside the insulator
+                property_c = mixture_property(Tc, xi_c, P)
+                property_h = mixture_property(Th, xi_h, P)
+                mix_pro_ave = (property_h + property_c) / 2
+                k_e = mix_pro_ave["k"] * vof + ks * (1 - vof)  # effective heat conductivity of the insulator
+                # calculate the diffusional flux inside the insulator
+                cold_cond = [Tc, xi_c["Methanol"], xi_c["H2O"], radium[1 - self.location]]
+                hot_cond = [Th, xi_h["Methanol"], xi_h["H2O"], radium[self.location]]
+                cond_list = [hot_cond, cold_cond]
+                cal_property = [mix_pro_ave["cp_Methanol"], mix_pro_ave["cp_H2O"], k_e]
+                # [xc, xd, Nc,Nd, T, dTdz]
+                ode_res = self.ode_multi(xi_h, cond_list[self.location], cond_list[self.location - 1], P, cal_property)
 
-                    # mass flux inside the insulator, mol/(s m)
-                    na_H20 = ode_res[3][-self.location] * radium[-self.location] * 2 * np.pi * vof
-                    na_CH3OH = ode_res[2][-self.location] * radium[-self.location] * 2 * np.pi * vof
+                # mass flux inside the insulator, mol/(s m)
+                na_H20 = ode_res[3][-self.location] * radium[-self.location] * 2 * np.pi * vof
+                na_CH3OH = ode_res[2][-self.location] * radium[-self.location] * 2 * np.pi * vof
 
-                    # heat conduction inside the insulator, W/m
-                    qcv_cond = -k_e * ode_res[5][-self.location] * radium[-self.location] * 2 * np.pi
-                    # heat convection inside the reactor
-                    # qcv_conv = -self.convection(Th, P, F_dict) * radium[self.location] * 2 * np.pi * (Tw - Th)
-                    qcv_delta = 5  # abs(qcv_cond - qcv_conv)
-                    Tw -= 1
-                    # print(Th, Tw, qcv_cond, qcv_conv)
+                # heat conduction inside the insulator, W/m
+                qcv_cond = -k_e * ode_res[5][-self.location] * radium[-self.location] * 2 * np.pi
+
                 gap_min = ode_res[1][-1] - cond_list[self.location - 1][2]
                 property_h = mixture_property(Th, xi_h, P)
                 dT = qcv_cond / Ft / property_h["cp_m"]  # k/m
@@ -358,6 +357,7 @@ class Insulation:
                    PropsSI('HMOLAR', 'T', Tc, 'Q', 0, 'water')) * na_H20 + \
                   (PropsSI('HMOLAR', 'T', Tc, 'Q', 1, 'Methanol') -
                    PropsSI('HMOLAR', 'T', Tc, 'Q', 0, 'Methanol')) * na_CH3OH  # W
+
         res = {
             "mflux": dF, "hflux": qcv_cond, "hlg": qcv_lat,
             "Tvar": dT, "dev": dev

@@ -218,11 +218,11 @@ class Simulation:
         """
 
         # reactor metric
-        # y= [F_CO2, F_H2, F_CH3OH, F_H2O,
+        # y= z [F_CO2, F_H2, F_CH3OH, F_H2O, F_CO
         # react: F_CO2, F_H2, F_CH3OH, F_H2O, F_CO,
-        # diff: F_CO, F_CO2, F_H2, F_CH3OH, F_H2O, F_CO,
-        # Tr, Tc, P, q_react, q_diff, q_heater]
-        To_r = sim_res[-7, -1]  # reactor output temperature
+        # diff: F_CO2, F_H2, F_CH3OH, F_H2O, F_CO,
+        # Tr, Tc, Th, P, q_react, q_diff, q_heater]
+        To_r = sim_res[16, -1]  # reactor output temperature
         r = (sim_res[1, 0] - sim_res[1, -1]) / sim_res[1, 0]  # conversion ratio
         r_c = (sim_res[1, 0] - sim_res[1, -1] + sim_res[5, 0] - sim_res[5, -1]) / (
                 sim_res[1, 0] + sim_res[5, 0])  # conversion ratio of Carbon
@@ -230,20 +230,20 @@ class Simulation:
         dF_react_ch3oh = (sim_res[1, 0] - sim_res[1][-1]) - dF_react_rwgs  # amount of reaction CO2 to CH3OH
         dF_react_h2o = dF_react_rwgs + dF_react_ch3oh  # amount of water produced
         s_react = dF_react_ch3oh / (sim_res[1, 0] - sim_res[1, -1])  # selectivity of reactions
-        dH_react = sim_res[-3, -1]
-        dP = sim_res[-4, -1] - sim_res[-4, 0]
+        dH_react = sim_res[20, -1]
+        dP = sim_res[19, -1] - sim_res[19, 0]
 
         # in-situ separation metric
 
-        Tin_c = sim_res[-6, -1]  # input water temperature in the cold side of insulator
-        To_h = sim_res[-5, -1]
+        Tin_c = sim_res[17, -1]  # input water temperature in the cold side of insulator
+        To_h = sim_res[18, -1]
         dF_diff_ch3oh = dF_react_ch3oh - (sim_res[3, -1] - sim_res[3, 0])  # amount of CH3OH condensed
         dF_diff_h2o = dF_react_h2o - (sim_res[4][-1] - sim_res[4][0])  # amount of H2O condensed
         sp_ch3oh = dF_diff_ch3oh / dF_react_ch3oh  # separation ratio of CH3OH
         sp_h2o = dF_diff_h2o / dF_react_h2o  # separation ratio of H2O
         N_CH3OH_H2O = dF_diff_ch3oh / dF_diff_h2o
-        dH_diff = sim_res[-2, -1]
-        dH_heater = sim_res[-1, -1]
+        dH_diff = sim_res[21, -1]
+        dH_heater = sim_res[22, -1]
         yield_CH3OH = dF_diff_ch3oh if 1 in self.status else dF_react_ch3oh  # mol/s
         eff = dH_heater / 1000 / (yield_CH3OH * 32)  # kJ/g CH3OH
         res = pd.Series([r, r_c, s_react, yield_CH3OH, dP, To_r,
@@ -309,22 +309,23 @@ class Simulation:
         else:
             [q_react_in, q_diff_in, q_heater_in] = diff_in
 
-        react_sim = Reaction(L, Dt, nrt, phi, rhoc, self.chem_para, T_in, P_in, F_in, self.eos)
+        react_sim = Reaction(L, Dt, nrt, phi, rhoc, self.chem_para, T_in, P_in, F_in, self.eos, qmh)
         insula_sim = Insulation(Do, Din, nit, location)
         F_feed_pd = pd.Series(self.F0, index=self.comp_list)
         property_feed = mixture_property(self.T_feed, xi_gas=F_feed_pd / np.sum(self.F0), Pt=P_in)
 
         # self.heater = max(q_h_guess, heater)
+        Twcs = []
 
         def model(z, y):
             # y= [F_CO2, F_H2, F_CH3OH, F_H2O, F_CO
             # react: F_CO2, F_H2, F_CH3OH, F_H2O, F_CO,
             # diff: F_CO2, F_H2, F_CH3OH, F_H2O, F_CO,
-            # Tr, Tc, Th, P, q_react, q_diff, q_heater]
+            # Tr, Tc, Th, P, q_react, q_diff, q_heater, Twc]
             F = np.array(y[:5])
-            Tr, Tc = y[-7], y[-6]
-            Th = y[-5]
-            P = y[-4]
+            Tr, Tc = y[15], y[16]
+            Th = y[17]
+            P = y[18]
             # print(z, Tr, Tc, F[1])
             # simulation of reactor
             try:
@@ -333,6 +334,7 @@ class Simulation:
                 print(f'{e}: {Tr}_{P}_{F}')
                 exit(0)
             dP_dz = 0 if self.drop == 0 else react_sim.ergun(Tr, P, F) * 1e-5  # bar/m
+            Rh_r = 1 / (react_sim.htr(Tr, P, F) * np.pi * Dt)  # heat resistance of catalytic layer
             # convert reaction rate per length to per kg catalyst
             dl2dw = np.pi * ((Dt ** 2) / 4) * rhoc * phi
             if status == 1 and z > 0:
@@ -340,30 +342,69 @@ class Simulation:
                 # volume fraction of catalyst
                 # r_v_ins_v_react = Do ** 2 * nit / Dt ** 2 / nrt if location == 1 else 0
                 Dh = 0.02
-                r_v_ins_v_react = Dh ** 2 / Dt ** 2
-                # r_v_ins_v_react = 0.08 for CO exp 1999
+                r_v_ins_v_react = Dh ** 2 / Dt ** 2 if qmh != 0 else 0  # r_v_ins_v_react = 0.08 for CO exp 1999
+
                 coe_Tc = -1 if location == 1 else 1
-                res_diff = insula_sim.flux(Tr, P, F, Tc)  # simulation of insulator
+
+                # HMT calculation
+                # find the temperature of diffusion layer on the reaction side, Twc
+                Twc0 = (Tr + Tc) / 2  # guess a Twc
+                Rh_d0 = insula_sim.Rh_d_pre(Twc0, P, F, Tc)
+                Rh_c0 = Rh_d0 + Rh_r
+                qh = (Th - Tr) / (Rh_r * Dt / 0.02) if qmh != 0 else 0
+                qc0 = (Tr - Tc) / Rh_c0
+                Twc0 = Tc + qc0 * Rh_d0
+
+                Twc_cal = Twc0
+                dev, n_iter = 100, 0
+                dT_iter = 0.5
+                while True:
+                    res_diff_cal = insula_sim.flux(Twc_cal, P, F, Tc)  # simulation of insulator
+                    qc_d = coe_Tc * res_diff_cal['hflux']
+                    qc_r = (Tr - Twc_cal) / Rh_r
+                    dev_cal = (abs(qc_d) - qc_r) / abs(qc_d)
+                    if n_iter == 0:
+                        dev_cal0 = dev_cal
+
+                    if abs(dev_cal) < dev:
+                        dev = abs(dev_cal)
+                        Twc = Twc_cal
+                        res_diff = res_diff_cal
+                    if abs(dev_cal) < 0.01 or n_iter > 10:
+                        if n_iter > 10:
+                            print(n_iter, dev_cal, Twc, qc_d, qc_r, dT_iter)
+                        break
+
+                    if dev_cal0 < 0:
+                        if dev_cal < 0:
+                            Twc_cal += dT_iter
+                        else:
+                            Twc_cal -= dT_iter
+                            dT_iter = max(0.05, dT_iter - 0.2)
+                    else:
+                        if dev_cal > 0:
+                            Twc_cal -= dT_iter
+                        else:
+                            Twc_cal += dT_iter
+                            dT_iter = max(0.05, dT_iter - 0.2)
+
+                    n_iter += 1
+                # print(n_iter, dev_cal, Twc, qc_d, qc_r, dT_iter)
                 dTc_dz = -pattern * (coe_Tc * (res_diff['hflux'] + res_diff['hlg']) * nit) / qmc / 76
-                ks_h = 18.3  # thermal conductivity of 304, W/m K
-                delta_h = 2e-3  # thickness of internal tube
-                q_h = ks_h * (Th - Tr) / delta_h * np.pi * 0.02  # thermal power W/m
-                dTh_dz = -q_h / qmh / 85.8
+                dTh_dz = -qh / qmh / 86 if qmh != 0 else 0  # 513K 4MPa
             else:
                 r_v_ins_v_react = 0
                 res_diff = {'mflux': np.zeros(len(self.comp_list)), 'hflux': 0, "Tvar": 0, 'hlg': 0}
                 dTc_dz = -pattern * self.Uc * (Tc - Tr) * np.pi * Dt / (property_feed["cp_m"] * np.sum(F_in))
-                q_h = 0
-                dTh_dz = 0
-
+                qh, dTh_dz, Twc, dev = 0, 0, 0, 0
+            Twcs.append([z, Twc, dev])
             heat_cap = mixture_property(Tr, pd.Series(F / np.sum(F), index=self.comp_list), P)['cp_m'] * np.sum(F)
             cooler = self.Uc * (Tc - Tr) * np.pi * Dt / heat_cap  # res_react['tc']
 
             dF_react_dz = res_react['mflux'] * dl2dw * (1 - r_v_ins_v_react) * self.nrt
             dF_diff_dz = res_diff["mflux"] * nit
             dF_dz = dF_react_dz + dF_diff_dz
-
-            q_heater = q_h  # q_h_guess  #
+            q_heater = qh  # q_h_guess  #
             dTr_dz = res_react["Tvar"] * dl2dw * (1 - r_v_ins_v_react) * nrt + res_diff["Tvar"] * self.nit + \
                      cooler + q_heater / heat_cap  # res_react['tc']
             dq_rea_dz = res_react["hflux"] * dl2dw * (1 - r_v_ins_v_react) * self.nrt  # W/m
@@ -377,11 +418,14 @@ class Simulation:
         z_span = [0, L]
         Tc_ini = Tc_in if status == 1 else self.T_feed
         Th_ini = Th_in
+
         ic = np.hstack((F_in, np.zeros(len(self.comp_list)), np.zeros(len(self.comp_list)),
                         np.array([T_in, Tc_ini, Th_ini, P_in, q_react_in, q_diff_in, q_heater_in])))
         res_sim = scipy.integrate.solve_ivp(model, z_span, ic, method='BDF',
                                             t_eval=np.linspace(0, L, 1000))  # LSODA BDF
+        np.savetxt(r"D:\document\04Code\PycharmProjects\MTC\result\Twc.txt", np.array(Twcs))
         res = np.vstack((np.linspace(0, L, 1000), res_sim.y))
+        # res[23, 1:] = res[23, 1:] - res[23, :-1]
         return res
 
     def multi_reactor(self):
@@ -392,10 +436,10 @@ class Simulation:
             insulator_para = self.insulator.iloc[n]
             reactor_para = self.reactor_para.iloc[n]
             res[f'{n}'] = self.one_pass(reactor_para, insulator_para, feed_para, diff_para)
-            F_out, Tr_out, Tc_out = res[f'{n}'][1:6, -1].copy(), res[f'{n}'][-7, -1].copy(), res[f'{n}'][-6, -1].copy()
-            Th_out = res[f'{n}'][-5, -1].copy()
-            P_out = res[f'{n}'][-4, -1].copy()
-            diff_para = res[f'{n}'][-3:, -1].copy()
+            F_out, Tr_out, Tc_out = res[f'{n}'][1:6, -1].copy(), res[f'{n}'][16, -1].copy(), res[f'{n}'][17, -1].copy()
+            Th_out = res[f'{n}'][18, -1].copy()
+            P_out = res[f'{n}'][19, -1].copy()
+            diff_para = res[f'{n}'][20:23, -1].copy()
             feed_para = pd.Series([Tr_out, P_out, F_out], index=['T0', 'P0', 'F0'])
         if self.stage >= 1:
             res_profile = res['0']
@@ -443,7 +487,7 @@ class Simulation:
             res0 = self.one_pass(self.reactor_para.iloc[0], self.insulator.iloc[0], feed)
             F_re_cal0 = res0[:, -1][1:6]  # * ratio
             if loop == 'direct':
-                T_re_cal0 = res0[:, -1][-6] if status == 1 else self.T0  # self.T0  #
+                T_re_cal0 = res0[:, -1][16] if status == 1 else self.T0  # self.T0  #
             elif loop == 'indirect':
                 T_re_cal0 = self.T0
             if status == 0:
@@ -459,7 +503,7 @@ class Simulation:
             feed = pd.Series([T_in1, P_in, F_in1], index=['T0', 'P0', 'F0'])
             res1 = self.one_pass(self.reactor_para.iloc[0], self.insulator.iloc[0], feed)
             F_re_cal1 = res1[:, -1][1:6]  # * ratio
-            T_re_cal1 = res1[:, -1][-6] if status == 1 else self.T0  # self.T0  #
+            T_re_cal1 = res1[:, -1][16] if status == 1 else self.T0  # self.T0  #
             if status == 0:
                 # separation through flash can
                 f_cal = VLEThermo(self.comp_list)
@@ -528,14 +572,14 @@ class Simulation:
                 # print(f"ValueError: 'too low r too long reactor!':{r_sim:.2f}_{L0:.2f}")
                 return res_profile
                 # raise ValueError(f"{RED}ValueError: 'too low r too long reactor!':{r_sim:.2f}_{L0:.2f}{ENDC}")
-            if res_profile[-6, -1] < 443:
+            if res_profile[16, -1] < 443:
                 return res_profile
                 # print(f"ValueError: 'too low heater!':{r_sim:.2f}_{L0:.2f}_{res_profile[-6, -1]:.2f}")
                 # raise ValueError(f'{RED}too low heater!:{r_sim:.2f}_{L0:.2f}_{res_profile[-6, -1]:.2f}{ENDC}')
             if n_iter > 20:
                 return res_profile
             try:
-                To = res_profile[-6, -1]
+                To = res_profile[16, -1]
             except UnboundLocalError:
                 To = 483
 
@@ -578,7 +622,7 @@ class Simulation:
         if self.recycle == 1:
             res_profile, F_recycle = self.recycler(loop=loop, rtol=rtol)
             r_metric = self.reactor_metric(res_profile)
-            T_feed = res_profile[-7, 1000 - 1] if self.stage == 2 else self.T_feed
+            T_feed = res_profile[16, 1000 - 1] if self.stage == 2 else self.T_feed
             # calculate metric for recycled reactor
             p_conversion = pd.Series(r_metric["y_CH3OH"] / self.F0[0], index=["p_conversion"])
             p_metric = self.recycle_metric(res_profile, F_recycle, T_feed)
@@ -590,7 +634,8 @@ class Simulation:
             res_profile = self.multi_reactor() if r_target is None else self.to_r(r_target)
             r_metric = self.reactor_metric(res_profile)
             metric = r_metric
-            res_path = 'result/sim_one_pass_Th_%s_%s_%s_%s_log.xlsx' % (ks, kn_model, self.stage, datetime.now().date())
+            res_path = 'result/sim_one_pass_U_%s_%s_%s_%s_log.xlsx' % (
+                ks, kn_model, self.stage, datetime.now().date())
         # calculate partial fugacity along the reactor
 
         print("*" * 10)
@@ -618,8 +663,9 @@ class Simulation:
             save_data = pd.DataFrame(res_profile.T, columns=['z'] + self.comp_list +
                                                             ['dF_re_' + i for i in self.comp_list] +
                                                             ['dF_diff_' + i for i in self.comp_list] +
-                                                            ['Tr', 'Tc', 'Th', 'dP', 'q_react', 'q_diff', 'q_heater'])
-            sim_path = 'result/sim_profile_Th_%s_%s_%s_%s_%s_%s_%s_%s_%s_%s_%s.xlsx' \
+                                                            ['Tr', 'Tc', 'Th', 'dP',
+                                                             'q_react', 'q_diff', 'q_heater'])
+            sim_path = 'result/sim_profile_U_%s_%s_%s_%s_%s_%s_%s_%s_%s_%s_%s.xlsx' \
                        % (self.stage, ks, kn_model, self.status, self.recycle, self.Dt.values, self.L.values,
                           self.T0, self.P0, self.Tc, self.Th)
             sheet_name = 'U_%s_eos_%s_drop_%s' % (self.Uc, self.eos, self.drop) if self.recycle == 0 else \

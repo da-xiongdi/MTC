@@ -5,7 +5,7 @@ import pandas as pd
 from prop_calculator import mixture_property, VLEThermo
 
 R = 8.314  # J/mol/K
-ks, vof = 0.2, 0.8 #0.2, 0.8  # 0.2 1.5 for 0.42 1 for 0.3 0.2 for 0.15 # 1, 0.4 for CO exp
+ks, vof = 1.2, 0.47  # 0.2, 0.8  # 0.2 1.5 for 0.42 1 for 0.3 0.2 for 0.15 # 1, 0.4 for CO exp
 
 
 class Reaction:
@@ -14,15 +14,18 @@ class Reaction:
     energy and mass balance are calculated
     """
 
-    def __init__(self, L, D, n, phi, rho, chem_para, T0, P0, F0, eos):
+    def __init__(self, L, D, n, phi, rho, chem_para, T0, P0, F0, eos, qmh=0):
 
         # 0 for ideal 1 for SRK
         self.eos = eos
 
+        #
+        self.qmh = qmh
+
         # reactor parameters
         self.L, self.Dt, self.n = L, D, n
         self.phi, self.rho = phi, rho
-        self.ds = 5e-3  # catalyst particle diameter
+        self.ds = 6e-3  # catalyst effective particle diameter, cylinder
 
         # prescribed chem data of reaction
         self.comp_list = ["CO2", "H2", "Methanol", "H2O", "CO"]
@@ -35,13 +38,12 @@ class Reaction:
             self.react_sto[i] = self.chem_data["stoichiometry"][key]
 
         # feed gas parameter
+        self.vle_cal = VLEThermo(self.comp_list)
         self.R = 8.314
         self.P0, self.T0 = P0, T0  # P0 bar, T0 K
         self.F0, self.Ft0 = F0, np.sum(F0)
-        self.v0 = self.Ft0 * self.R * self.T0 / (self.P0 * 1e5)
-
-        #
-        self.vle_cal = VLEThermo(self.comp_list)
+        z0 = self.vle_cal.z(T=T0, P=P0, x=F0)
+        self.v0 = z0 * self.Ft0 * self.R * self.T0 / (self.P0 * 1e5)
 
     @staticmethod
     def react_H(T, in_dict):
@@ -100,15 +102,16 @@ class Reaction:
         :return: pressure drop per length, pa/m
         """
         Ft = np.sum(F_dict)
-        v = self.v0 * (self.P0 / P) * (T / self.T0) * (Ft / self.Ft0)
-        a_e = self.Dt ** 2 / 4 if self.L == 0.5 else (self.Dt ** 2 - 0.02**2) / 4
-        u = v / (np.pi * a_e)
+        xi = F_dict / Ft * P
+        z = self.vle_cal.z(T=T, P=P, x=F_dict)
+        gas_prop = mixture_property(T, pd.Series(xi, index=self.comp_list), P, z, rho_only=False)
+        v = Ft / (gas_prop['rho'] / gas_prop['M'])  # m3/s self.v0 * (self.P0 / P) * (T / self.T0) * (Ft / self.Ft0)
+        Ae = self.Dt ** 2 / 4 if self.qmh == 0 else (self.Dt ** 2 - 0.02 ** 2) / 4
+        u = v / (np.pi * Ae)
         if self.eos == 1:
             # properties = VLE(T, comp=self.comp_list)
             # _, z = properties.phi(pd.Series(F_dict / Ft, index=self.comp_list), P)
-            # print(z)
-            z = np.array(self.vle_cal.z(T=T, P=P, x=F_dict))
-            # print(z)
+            z = self.vle_cal.z(T=T, P=P, x=F_dict)
         elif self.eos == 0:
             z = 1
         gas_property = mixture_property(T, pd.Series(F_dict / Ft, index=self.comp_list), P, z, rho_only=False)
@@ -143,6 +146,47 @@ class Reaction:
         h = Nu * mix_property['k'] / self.Dt  # W/m K
         return h
 
+    def htr(self, T, P, F_dict):
+        """
+        calculate the internal heat transfer coe in within the catalyst layer
+        Cui, CEJ, 2020
+        :param T: temperature of reactor gas, K
+        :param P: pressure of reactor, bar
+        :param F_dict: molar flow rate of each component, mol/s; ndarray
+        :return: convection heat transfer coefficient, W/m2 K
+        """
+        Ft = np.sum(F_dict)
+        xi = F_dict / Ft * P
+        z = self.vle_cal.z(T=T, P=P, x=F_dict)
+        gas_prop = mixture_property(T, pd.Series(xi, index=self.comp_list), P, z, rho_only=False)
+        kp = 0.21 + 0.00015 * T  # thermal conductivity of particle
+        De = self.Dt if self.qmh == 0 else (self.Dt - 0.02)  # effective diameter of annual tube
+        Ae = self.Dt ** 2 / 4 if self.qmh == 0 else (self.Dt ** 2 - 0.02 ** 2) / 4
+
+        v = Ft / (gas_prop['rho'] / gas_prop['M'])  # m3/s self.v0 * (self.P0 / P) * (T / self.T0) * (Ft / self.Ft0)
+        u = v / (np.pi * Ae)
+        Re = u * gas_prop['rho'] * self.ds / gas_prop['vis']
+        Pr = gas_prop['vis'] * (gas_prop['cp_m'] / gas_prop['M']) / gas_prop['k']
+        Pe = Re * Pr
+        N = De / self.ds
+        PeL = 8 * (2 - (1 - 2 / N) ** 2)
+        kappa = kp / gas_prop['k']
+        B = 1.25 * 2 * (self.phi / (1 - self.phi)) ** 1.11
+        right_term2 = (B * (1 - 1 / kappa) / (1 - B / kappa) ** 2 * np.log(kappa / B) -
+                       (B - 1) / (1 - B / kappa) + (B + 1) / 2) * 2 * self.phi ** 0.5 / (1 - B / kappa)
+        kr = (1 - self.phi ** 0.5) / (1 / gas_prop['k'] - right_term2)
+        ke_r = (kr / gas_prop['k'] + Pe / PeL) * gas_prop['k']
+        Nu_w0 = (1.3 + 5 / N) * (kr / gas_prop['k'])
+        Nu_ws = 0.3 * Pr ** (1 / 3) * Re ** 0.75
+        Nu_m = 0.054 * Pr * Re
+        Nu_w = Nu_w0 + 1 / (1 / Nu_ws + 1 / Nu_m)
+        hw = Nu_w * gas_prop['k'] / self.ds
+        Bi = hw * De / 2 / ke_r
+        hk = 1 / (De / 2 / 3 / ke_r * (Bi + 3) / (Bi + 4))
+        Ut = 1 / (1 / hw + 1 / hk)
+
+        return Ut
+
     def rate_vi(self, T, Pi):
         """
         calculate the reaction rate
@@ -157,7 +201,7 @@ class Reaction:
         k_r = 11101.2 * np.exp(-117432 / 8.314 / T)
         Ke = 1 / np.exp(-12.11 + 5319 / T + 1.012 * np.log(T) + 1.144 * 10 ** (-4 * T))
         react_rate = k_r * (Pi["CO2"] - Pi["CO"] * Pi["H2O"] / Ke / Pi["H2"]) / (
-                    1 + K_H2O * Pi["H2O"] / Pi["H2"]) * 1000
+                1 + K_H2O * Pi["H2O"] / Pi["H2"]) * 1000
 
         react_comp_rate = np.zeros((3, 5))
         react_comp_rate[1] = react_rate * self.react_sto[1]
