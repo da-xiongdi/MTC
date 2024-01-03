@@ -47,13 +47,15 @@ class Simulation:
         self.recycle = self.reactors_para['recycle']
         Dt_name = [f'Dt{n + 1}' for n in range(self.stage)]
         L_name = [f'L{n + 1}' for n in range(self.stage)]
+        Din_name = [f'Din{n + 1}' for n in range(self.stage)]
         self.L, self.Dt = self.reactors_para[L_name], self.reactors_para[Dt_name]
+        self.Din = self.reactors_para[Din_name]
         self.nrt = self.reactors_para['nrt']
         reactors = pd.DataFrame(index=np.arange(self.stage),
-                                columns=['L', 'Dt'] + self.reactors_para.index[self.stage * 2:].tolist())
+                                columns=['L', 'Dt', 'Din'] + self.reactors_para.index[self.stage * 3:].tolist())
         for n in range(self.stage):
-            reactors.loc[n, ['L', 'Dt']] = [self.L[n], self.Dt[n]]
-            reactors.iloc[n, 2:] = self.reactors_para[2 * self.stage:]
+            reactors.loc[n, ['L', 'Dt', 'Din']] = [self.L[n], self.Dt[n], self.Din[n]]
+            reactors.iloc[n, 3:] = self.reactors_para[3 * self.stage:]
         return reactors
 
     def _feed_para(self):
@@ -290,33 +292,35 @@ class Simulation:
         :return: molar flux and temperature profile along the reactor
         """
         [T_in, P_in, F_in] = feed.loc[['T0', 'P0', 'F0']].values
-        [L, Dt, nrt, phi, rhoc] = reactor.loc[['L', 'Dt', 'nrt', 'phi', 'rhoc']].values
+        [L, Dt, Dc, nrt, phi, rhoc] = reactor.loc[['L', 'Dt',"Din", 'nrt', 'phi', 'rhoc']].values
         [Din, thick, Tc_in, qmc, Th_in, qmh] = insulator.loc[['Din', 'Thick', 'Tc', 'qmc', 'Th', 'qmh']].values
         Dt = Din if self.location == 0 else Dt
         [status, pattern, nit, location] = insulator.loc[['status', 'pattern', 'nit', 'location']].values
-
+        print(Din, thick, L)
         # if status == 1:
-        #     q_h_guess = round((T_in - Tc_in) / thick * 0.2 * np.pi * Din * heater, 2)  # 1 for CO 0.2 for CO2; W/m
-        #     # L = round(min(1400 / q_h_guess, L), 2)
-        #     print(Din, thick, heater, L, q_h_guess)
-        #     # self.reactors_para['L2'] = L
+        #     q_h_guess = round((T_in - Tc_in) / thick * 0.36 * np.pi * Din * 0.52, 2)  # 1 for CO 0.2 for CO2; W/m
+        # #     # L = round(min(1400 / q_h_guess, L), 2)
+        # #     print(Din, thick, heater, L, q_h_guess)
+        # #     # self.reactors_para['L2'] = L
         # else:
         #     q_h_guess = 0
-
+        # print(q_h_guess * L)
         Do = Din + thick * 2
         if diff_in is None:
             q_react_in, q_diff_in, q_heater_in = 0, 0, 0
         else:
             [q_react_in, q_diff_in, q_heater_in] = diff_in
 
-        react_sim = Reaction(L, Dt, nrt, phi, rhoc, self.chem_para, T_in, P_in, F_in, self.eos, qmh)
+        react_sim = Reaction(L, Dt, Dc,nrt, phi, rhoc, self.chem_para, T_in, P_in, F_in, self.eos, qmh)
         insula_sim = Insulation(Do, Din, nit, location)
         F_feed_pd = pd.Series(self.F0, index=self.comp_list)
         property_feed = mixture_property(self.T_feed, xi_gas=F_feed_pd / np.sum(self.F0), Pt=P_in)
 
         # self.heater = max(q_h_guess, heater)
         Twcs = []
-
+        # N0_CH3OH = 1.4E-3 * 8E-3 / thick
+        # L0 = round(0.008154456 / N0_CH3OH * 0.8, 2)
+        # print(L0)
         def model(z, y):
             # y= [F_CO2, F_H2, F_CH3OH, F_H2O, F_CO
             # react: F_CO2, F_H2, F_CH3OH, F_H2O, F_CO,
@@ -328,36 +332,37 @@ class Simulation:
             P = y[18]
             # print(z, Tr, Tc, F[1])
             # simulation of reactor
-            try:
-                res_react = react_sim.balance(Tr, P, F)
-            except ValueError as e:
-                print(f'{e}: {Tr}_{P}_{F}')
-                exit(0)
+            res_react = react_sim.balance(Tr, P, F)
+            # try:
+            #     res_react = react_sim.balance(Tr, P, F)
+            # except ValueError as e:
+            #     print(f'{e}: {Tr}_{P}_{F}')
+            #     exit(0)
             dP_dz = 0 if self.drop == 0 else react_sim.ergun(Tr, P, F) * 1e-5  # bar/m
-            Rh_r = 1 / (react_sim.htr(Tr, P, F) * np.pi * Dt)  # heat resistance of catalytic layer
+            hr = react_sim.htr(Tr, P, F)
+
+            Rh_r = 1 / (hr * np.pi * Dt)  # heat resistance of catalytic layer
             # convert reaction rate per length to per kg catalyst
             dl2dw = np.pi * ((Dt ** 2) / 4) * rhoc * phi
             if status == 1 and z > 0:
                 # the module insulator is on
                 # volume fraction of catalyst
                 # r_v_ins_v_react = Do ** 2 * nit / Dt ** 2 / nrt if location == 1 else 0
-                Dh = 0.02
-                r_v_ins_v_react = Dh ** 2 / Dt ** 2 if qmh != 0 else 0  # r_v_ins_v_react = 0.08 for CO exp 1999
+                r_v_ins_v_react = Dc ** 2 / Dt ** 2 if qmh != 0 else 0  # r_v_ins_v_react = 0.08 for CO exp 1999
 
                 coe_Tc = -1 if location == 1 else 1
 
                 # HMT calculation
                 # find the temperature of diffusion layer on the reaction side, Twc
-                Twc0 = (Tr + Tc) / 2  # guess a Twc
-                Rh_d0 = insula_sim.Rh_d_pre(Twc0, P, F, Tc)
+                Rh_d0 = insula_sim.Rh_d_pre()
                 Rh_c0 = Rh_d0 + Rh_r
-                qh = (Th - Tr) / (Rh_r * Dt / 0.02) if qmh != 0 else 0
+                qh = (Th - Tr) / (Rh_r * Dt / Dc) if qmh != 0 else 0 # q_h_guess  #
                 qc0 = (Tr - Tc) / Rh_c0
                 Twc0 = Tc + qc0 * Rh_d0
-
                 Twc_cal = Twc0
                 dev, n_iter = 100, 0
-                dT_iter = 0.5
+                dT_iter = 0.1
+                # res_diff = insula_sim.flux(Twc_cal, P, F, Tc)
                 while True:
                     res_diff_cal = insula_sim.flux(Twc_cal, P, F, Tc)  # simulation of insulator
                     qc_d = coe_Tc * res_diff_cal['hflux']
@@ -365,7 +370,8 @@ class Simulation:
                     dev_cal = (abs(qc_d) - qc_r) / abs(qc_d)
                     if n_iter == 0:
                         dev_cal0 = dev_cal
-
+                        res_diff = res_diff_cal
+                        Twc = Twc_cal
                     if abs(dev_cal) < dev:
                         dev = abs(dev_cal)
                         Twc = Twc_cal
@@ -374,7 +380,6 @@ class Simulation:
                         if n_iter > 10:
                             print(n_iter, dev_cal, Twc, qc_d, qc_r, dT_iter)
                         break
-
                     if dev_cal0 < 0:
                         if dev_cal < 0:
                             Twc_cal += dT_iter
@@ -397,7 +402,7 @@ class Simulation:
                 res_diff = {'mflux': np.zeros(len(self.comp_list)), 'hflux': 0, "Tvar": 0, 'hlg': 0}
                 dTc_dz = -pattern * self.Uc * (Tc - Tr) * np.pi * Dt / (property_feed["cp_m"] * np.sum(F_in))
                 qh, dTh_dz, Twc, dev = 0, 0, 0, 0
-            Twcs.append([z, Twc, dev])
+            Twcs.append([z, Twc, dev, hr, ks / thick])
             heat_cap = mixture_property(Tr, pd.Series(F / np.sum(F), index=self.comp_list), P)['cp_m'] * np.sum(F)
             cooler = self.Uc * (Tc - Tr) * np.pi * Dt / heat_cap  # res_react['tc']
 
@@ -423,7 +428,9 @@ class Simulation:
                         np.array([T_in, Tc_ini, Th_ini, P_in, q_react_in, q_diff_in, q_heater_in])))
         res_sim = scipy.integrate.solve_ivp(model, z_span, ic, method='BDF',
                                             t_eval=np.linspace(0, L, 1000))  # LSODA BDF
-        np.savetxt(r"D:\document\04Code\PycharmProjects\MTC\result\Twc.txt", np.array(Twcs))
+        if status == 1:
+            Twcs_path = f"D:/document/04Code/PycharmProjects/MTC/result/Twc_{Dt}_{L}_{thick}.txt"
+            np.savetxt(Twcs_path, np.array(Twcs))
         res = np.vstack((np.linspace(0, L, 1000), res_sim.y))
         # res[23, 1:] = res[23, 1:] - res[23, :-1]
         return res
@@ -545,7 +552,13 @@ class Simulation:
         if self.stage > 2:
             raise ValueError('stage > 2 is not supported with given conversion')
         # guess a length
-        L0 = 0.7 if self.reactors_para['Dt2'] > 0.06 else 2
+        Tc, Dd = self.insulator.iloc[1]['Tc'], self.insulator.iloc[1]['Thick']
+        # Psat_CH3OH = PropsSI('P', 'T', Tc, 'Q', 1, 'Methanol')
+        # Pr_CH3OH = 35E5
+        # Dt = self.reactor_para.iloc[1]['Dt']
+        # N0_CH3OH = (Pr_CH3OH/503-Psat_CH3OH/Tc)/8.314/Dd*7.4E-7*np.pi*Dt
+        N0_CH3OH = 1.4E-3 * 8E-3 / Dd
+        L0 = round(0.008154456 / N0_CH3OH * r_target, 2)  # 0.7 if self.reactors_para['Dt2'] > 0.06 else 2
         r_sim = 0
         L0_coe_pre, L0_coe = 1, 1
         n_iter = 0
@@ -563,7 +576,6 @@ class Simulation:
                     # Adjust L0
                     dL = L0 * 0.05
                     L0 = L0 - max(dL, 0.01)
-
             r_metric = self.reactor_metric(res_profile)
             r_sim = r_metric['conversion']
             print(r_sim)

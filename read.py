@@ -158,30 +158,37 @@ class ReadData:
 
         # reactor para frame
         L_array, Dt_array = [], []
+        Din_array = []
         for n in range(stage):
             L_array.append(self.data_array(self.react_para['L'][n]))
             Dt_array.append(self.data_array(self.react_para['Dt'][n]))
+            Din_array.append(self.data_array(self.react_para['Din'][n]))
 
         column = list(self.react_para.keys())
         column.remove('L')
         column.remove('Dt')
+        column.remove('Din')
         Dt_name = [f'Dt{n + 1}' for n in range(stage)]
         L_name = [f'L{n + 1}' for n in range(stage)]
+        Din_name = [f'Din{n + 1}' for n in range(stage)]
         # generate the combination of reactor length, diameter
         if stage > 0:
             Ls = [[L1] for L1 in L_array[0]]
             Dts = [[Dt1] for Dt1 in Dt_array[0]]
+            Dins = [[Din1] for Din1 in Din_array[0]]
         if stage > 1:
             for i in range(1, stage):
                 Ls = [[*L, L_i] for L in Ls for L_i in L_array[i]]
                 Dts = [[*Dt, Dt_i] for Dt in Dts for Dt_i in Dt_array[i]]
-        reactor_num = len(Ls) * len(Dts)
-        react_para = pd.DataFrame(index=np.arange(reactor_num), columns=L_name + Dt_name + column)
+                Dins = [[*Din, Din_i] for Din in Dins for Din_i in Din_array[i]]
+        reactor_num = len(Ls) * len(Dts) * len(Dins)
+        react_para = pd.DataFrame(index=np.arange(reactor_num), columns=L_name + Dt_name + Din_name + column)
         i = 0
         for L in Ls:
             for Dt in Dts:
-                react_para.iloc[i] = L + Dt + [stage, nrt, rhoc, phi, recycle, Uc]
-                i += 1
+                for Din in Dins:
+                    react_para.iloc[i] = L + Dt + Din + [stage, nrt, rhoc, phi, recycle, Uc]
+                    i += 1
         return react_para
 
     @staticmethod

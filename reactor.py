@@ -5,7 +5,7 @@ import pandas as pd
 from prop_calculator import mixture_property, VLEThermo
 
 R = 8.314  # J/mol/K
-ks, vof = 0.2, 0.8  # 0.2, 0.8  # 0.2 1.5 for 0.42 1 for 0.3 0.2 for 0.15 # 1, 0.4 for CO exp
+ks, vof = 0.2, 0.8  # 0.2, 0.8  # 0.2 1.5 for 0.42 1 for 0.3 0.2 for 0.15 # 1, 0.4 for CO exp 0.35 0.47
 
 
 class Reaction:
@@ -14,7 +14,7 @@ class Reaction:
     energy and mass balance are calculated
     """
 
-    def __init__(self, L, D, n, phi, rho, chem_para, T0, P0, F0, eos, qmh=0):
+    def __init__(self, L, D, Dc, n, phi, rho, chem_para, T0, P0, F0, eos, qmh=0):
 
         # 0 for ideal 1 for SRK
         self.eos = eos
@@ -24,6 +24,7 @@ class Reaction:
 
         # reactor parameters
         self.L, self.Dt, self.n = L, D, n
+        self.Dc = Dc
         self.phi, self.rho = phi, rho
         self.ds = 6e-3  # catalyst effective particle diameter, cylinder
 
@@ -106,7 +107,7 @@ class Reaction:
         z = self.vle_cal.z(T=T, P=P, x=F_dict)
         gas_prop = mixture_property(T, pd.Series(xi, index=self.comp_list), P, z, rho_only=False)
         v = Ft / (gas_prop['rho'] / gas_prop['M'])  # m3/s self.v0 * (self.P0 / P) * (T / self.T0) * (Ft / self.Ft0)
-        Ae = self.Dt ** 2 / 4 if self.qmh == 0 else (self.Dt ** 2 - 0.02 ** 2) / 4
+        Ae = self.Dt ** 2 / 4 if self.qmh == 0 else (self.Dt ** 2 - self.Dc ** 2) / 4
         u = v / (np.pi * Ae)
         if self.eos == 1:
             # properties = VLE(T, comp=self.comp_list)
@@ -160,8 +161,8 @@ class Reaction:
         z = self.vle_cal.z(T=T, P=P, x=F_dict)
         gas_prop = mixture_property(T, pd.Series(xi, index=self.comp_list), P, z, rho_only=False)
         kp = 0.21 + 0.00015 * T  # thermal conductivity of particle
-        De = self.Dt if self.qmh == 0 else (self.Dt - 0.02)  # effective diameter of annual tube
-        Ae = self.Dt ** 2 / 4 if self.qmh == 0 else (self.Dt ** 2 - 0.02 ** 2) / 4
+        De = self.Dt if self.qmh == 0 else (self.Dt - self.Dc)  # effective diameter of annual tube
+        Ae = self.Dt ** 2 / 4 if self.qmh == 0 else (self.Dt ** 2 - self.Dc ** 2) / 4
 
         v = Ft / (gas_prop['rho'] / gas_prop['M'])  # m3/s self.v0 * (self.P0 / P) * (T / self.T0) * (Ft / self.Ft0)
         u = v / (np.pi * Ae)
