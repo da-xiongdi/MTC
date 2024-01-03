@@ -5,7 +5,7 @@ import pandas as pd
 from prop_calculator import mixture_property, VLEThermo
 
 R = 8.314  # J/mol/K
-ks, vof = 1.2, 0.47  # 0.2, 0.8  # 0.2 1.5 for 0.42 1 for 0.3 0.2 for 0.15 # 1, 0.4 for CO exp
+ks, vof = 0.2, 0.8  # 0.2, 0.8  # 0.2 1.5 for 0.42 1 for 0.3 0.2 for 0.15 # 1, 0.4 for CO exp
 
 
 class Reaction:

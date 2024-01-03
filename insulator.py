@@ -74,7 +74,6 @@ class Insulation:
         [cp_c, cp_d, k] = properties
         [T1, x_c1, x_d1, r1] = inner_cond
         [T2, x_c2, x_d2, r2] = outer_cond
-
         # D_bi = self.bi_md((T1 + T2) / 2, P / 1e5)
         #
         # D_31, D_32 = D_bi[0, 0], D_bi[0, 1]
@@ -172,23 +171,17 @@ class Insulation:
 
         return ysol
 
-    def Rh_d_pre(self, Th, P, F_dict, Tc):
+    def Rh_d_pre(self):
         """
         estimate the heat resistance of catalytic layer
-        :param Th:
-        :param P:
-        :param F_dict:
-        :param Tc:
         :return:
         """
-        Ft = np.sum(F_dict)
         # insulator parameter
         radium = [self.Din / 2, self.Do / 2]
-        xi_h = pd.Series(F_dict / Ft, index=self.comp_list)
-        mix_pro_ave = mixture_property((Tc + Th) / 2, xi_h, P)  # rho is not used, hence z=1 is used
-        k_e = mix_pro_ave["k"] * vof + ks * (1 - vof)  # effective heat conductivity of the insulator
+        # mix_pro_ave = mixture_property((Tc + Th) / 2, xi_h, P)  # rho is not used, hence z=1 is used
+        k_e = ks  # mix_pro_ave["k"] * vof + ks * (1 - vof)/3  # effective heat conductivity of the insulator
         # heat conduction along the insulator
-        Rh_d = np.log(radium[1 - self.location] / radium[self.location])/(2*np.pi*k_e)
+        Rh_d = np.log(radium[1 - self.location] / radium[self.location]) / (2 * np.pi * k_e)
         return Rh_d
 
     def flux(self, Th, P, F_dict, Tc):
@@ -227,8 +220,8 @@ class Insulation:
 
             if Pi_h[diff_spec + 2] < P_sat[diff_spec]:
                 # condensation does not occur
-                mix_pro_ave = mixture_property((Tc + Th) / 2, xi_h, P)  # rho is not used, hence z=1 is used
-                k_e = mix_pro_ave["k"] * vof + ks * (1 - vof)  # effective heat conductivity of the insulator
+                # mix_pro_ave = mixture_property((Tc + Th) / 2, xi_h, P)  # rho is not used, hence z=1 is used
+                k_e = ks  # mix_pro_ave["k"] * vof + ks * (1 - vof)/3  # effective heat conductivity of the insulator
                 # heat conduction along the insulator
                 qcv_cond = -2 * np.pi * k_e * (Tc - Th) / np.log(radium[1 - self.location] / radium[self.location])
                 property_h = mixture_property(Th, xi_h, P)  # rho is not used, hence z=1 is used
@@ -248,7 +241,7 @@ class Insulation:
                 property_c = mixture_property(Tc, xi_c, P)
                 property_w = mixture_property(Tw, xi_h, P)
                 mix_pro_ave = (property_w + property_c) / 2
-                k_e = mix_pro_ave["k"] * vof + ks * (1 - vof)  # effective heat conductivity of the insulator
+                k_e = ks  # mix_pro_ave["k"] * vof + ks * (1 - vof)/3  # effective heat conductivity of the insulator
                 # calculate the diffusional flux inside the insulator
                 cold_cond = [Tc, xi_c["Methanol"], xi_c["H2O"], radium[1 - self.location]]
                 hot_cond = [Th, xi_h["Methanol"], xi_h["H2O"], radium[self.location]]
@@ -280,8 +273,8 @@ class Insulation:
             if P < P_dew:
                 # condensation does not occur
                 # gas properties inside the insulator
-                mix_pro_ave = mixture_property((Tc + Th) / 2, xi_h, P)  # rho is not used, hence z=1 is used
-                k_e = mix_pro_ave["k"] * vof + ks * (1 - vof)  # effective heat conductivity of the insulator
+                # mix_pro_ave = mixture_property((Tc + Th) / 2, xi_h, P)  # rho is not used, hence z=1 is used
+                k_e = ks  # mix_pro_ave["k"] * vof + ks * (1 - vof)/3  # effective heat conductivity of the insulator
 
                 # heat conduction along the insulator
                 qcv_cond = -2 * np.pi * k_e * (Tc - Th) / np.log(radium[1 - self.location] / radium[self.location])
@@ -304,8 +297,9 @@ class Insulation:
                 # gas properties inside the insulator
                 property_c = mixture_property(Tc, xi_c, P)
                 property_h = mixture_property(Th, xi_h, P)
+
                 mix_pro_ave = (property_h + property_c) / 2
-                k_e = mix_pro_ave["k"] * vof + ks * (1 - vof)  # effective heat conductivity of the insulator
+                k_e = ks  # mix_pro_ave["k"] * vof + ks * (1 - vof)/3  # effective heat conductivity of the insulator
                 # calculate the diffusional flux inside the insulator
                 cold_cond = [Tc, xi_c["Methanol"], xi_c["H2O"], radium[1 - self.location]]
                 hot_cond = [Th, xi_h["Methanol"], xi_h["H2O"], radium[self.location]]
@@ -335,7 +329,6 @@ class Insulation:
             # plt.show()
 
             if dev > 0.1: print([na_CH3OH, na_H20], dev, 'dev too big')
-
         dF = np.zeros_like(F_dict)
         dF[2:4] = [na_CH3OH, na_H20]
         # print(k_e)

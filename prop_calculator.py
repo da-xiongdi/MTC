@@ -5,48 +5,59 @@ import pandas as pd
 from CoolProp.CoolProp import PropsSI
 import scipy.optimize as opt
 
+warnings.filterwarnings('ignore')
 from thermo import (ChemicalConstantsPackage, SRKMIX, FlashVL, CEOSLiquid, CEOSGas, HeatCapacityGas,
                     FlashVLN)
+
 # from thermo.unifac import DOUFSG, DOUFIP2016, UNIFAC
 
-warnings.filterwarnings('ignore')
 # T_gas = 200  # 310.93  # K
 # P_gas = 30  # 6.3  # bar
 R = 8.314
 
 
-def mixture_property(T, xi_gas, Pt, z=1, rho_only=False):
+def mixture_property(T, xi_gas, Pt, z=1, rho_only=False, phis=None):
     """
     calculate the properties of gas mixture
     :param T: gas temperature, K
     :param xi_gas: molar fraction; pd.Serize
     :param Pt: total pressure, bar
     :param z: compression factor
+    :param rho_only: compute rho only
+    :param phis: fugacity coes
     :return: thermal conductivity W/(m K), viscosity Pa s, heat capacity J/mol/K; pd.series
     """
     # prepare data for calculation
+    if phis is not None:
+        phi_cal = VLEThermo(xi_gas.index.tolist())
+        phi_gas = phi_cal.phi(T, Pt, xi_gas.values)
+    else:
+        phi_gas = np.ones(len(xi_gas))
     new_index = ['CO' if i == 'carbon monoxide' else i for i in xi_gas.index.tolist()]
     xi_gas.index = new_index
     n = len(xi_gas.index)  # number of gas species
-    xi_gas = xi_gas/xi_gas.sum()
+    xi_gas = xi_gas / xi_gas.sum()
     [cp, k, vis, M, rho] = np.ones((5, n)) * 1e-5
-    pi_gas = xi_gas * Pt * 1e5  # convert bar to pa
+
+    fi_gas = xi_gas * Pt * 1e5 * phi_gas  # convert bar to pa
     Ti_sat = pd.Series(np.ones(n) * 100, index=xi_gas.index)
+
     if 'Methanol' in xi_gas.index:
         try:
-            Ti_sat['Methanol'] = PropsSI('T', 'P', pi_gas['Methanol'], 'Q', 1, 'Methanol')
+            Ti_sat['Methanol'] = PropsSI('T', 'P', fi_gas['Methanol'], 'Q', 1, 'Methanol')
         except ValueError:
             Ti_sat['Methanol'] = 300
     if "H2O" in xi_gas.index:
         try:
-            Ti_sat['H2O'] = PropsSI('T', 'P', pi_gas['H2O'], 'Q', 1, 'H2O')
+            Ti_sat['H2O'] = PropsSI('T', 'P', fi_gas['H2O'], 'Q', 1, 'H2O')
         except ValueError:
             Ti_sat['H2O'] = 300
     i = 0
     for comp in xi_gas.index:
         M[i] = PropsSI('MOLARMASS', 'T', T, 'P', 1e5, comp)  # molar weight, kg/mol
         i += 1
-
+    # print(Ti_sat)
+    # print(fi_gas)
     M_m = np.sum(M * xi_gas)  # molar weight of mixture, kg/mol
     # print(M_m)
     rho_m = Pt * 1E5 * M_m / (z * R * T)  # kg/m3 np.sum(rho)
@@ -59,20 +70,21 @@ def mixture_property(T, xi_gas, Pt, z=1, rho_only=False):
     # calculate the properties of pure gases
     for comp in xi_gas.index:
         gas = "N2" if comp == "CO" else comp  # "CO" is not available in CoolProp
-        if pi_gas[comp] > 1000:
-            if T > Ti_sat[comp] * 1.05:
+        if fi_gas[comp] > 1000:
+            if T > Ti_sat[comp] * 1.01:
                 # thermal conductivity, W/(m K)
                 k[i] = PropsSI('L', 'T', T, 'P', Pt, gas)
                 # viscosity, Pa S
                 vis[i] = PropsSI('V', 'T', T, 'P', Pt, gas)
                 # heat capacity, J/(mol K)
-                cp[i] = PropsSI('CPMOLAR', 'T', T, 'P', Pt, gas)
+                cp[i] = PropsSI('CP0MOLAR', 'T', T, 'P', Pt, gas)
                 # density, kg/m3
                 # rho[i] = PropsSI('D', 'T', T, 'P', xi_gas[comp], gas)
             else:
-                cp[i] = PropsSI('CPMOLAR', 'T', T, 'Q', 1, gas)
+                cp[i] = PropsSI('CP0MOLAR', 'T', T, 'Q', 1, gas)
                 k[i] = PropsSI('L', 'T', T, 'Q', 1, gas)
                 vis[i] = PropsSI('V', 'T', T, 'Q', 1, gas)
+                # print(comp, T, cp[i])
                 # rho[i] = PropsSI('D', 'T', T, 'Q', 1, gas)
         else:
             # thermal conductivity, W/(m K)
@@ -84,7 +96,7 @@ def mixture_property(T, xi_gas, Pt, z=1, rho_only=False):
             # density, kg/m3
             rho[i] = 0
         i += 1
-
+    # print(cp)
     # calculate the properties of mixture
     cp_m = np.sum(cp * xi_gas)
     phi, denominator = np.ones((n, n)), np.ones((n, n))  # Wilke coefficient
@@ -556,6 +568,16 @@ class VLEThermo:
         except UnboundLocalError:
             return 15e5
 
+    def T_dew(self, P, x):
+        frac = x / np.sum(x)
+        gas = CEOSGas(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw)
+        liquid = CEOSLiquid(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw)
+        flasher = FlashVL(self.const, self.cor, liquid=liquid, gas=gas)
+        try:
+            return flasher.flash(zs=frac, P=P*1e5, VF=1).T
+        except UnboundLocalError:
+            return 300
+
     def p_bub(self, T, x):
         frac = x / np.sum(x)
         gas = CEOSGas(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw)
@@ -564,7 +586,7 @@ class VLEThermo:
         try:
             return flasher.flash(zs=frac, T=T, VF=0).P / 1E5
         except UnboundLocalError:
-            print('no bubble point')
+            # print('no bubble point')
             return 15e5
 
     def phi(self, T, P, x):
@@ -589,20 +611,23 @@ class VLEThermo:
         frac = x / np.sum(x)
         gas = CEOSGas(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw, T=T, P=P * 1E5, zs=frac)
         liquid = CEOSLiquid(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw)
-        flasher = FlashVLN(self.const, self.cor, liquids=[liquid,liquid], gas=gas)
+        flasher = FlashVLN(self.const, self.cor, liquids=[liquid, liquid], gas=gas)
         TP = flasher.flash(zs=frac, T=T, P=P * 1E5)
         P_b = self.p_bub(T, x)
         sf = TP.VF
         try:
             flasher_gas = TP.gas.zs
         except AttributeError as e:
-            print(e)
+            # print(e)
             flasher_gas = None if P > P_b else TP.liquid1.zs
             sf = 0 if P > P_b else TP.liquids_betas[1]
+            if flasher_gas is None:
+                print('no gas in flash')
+                exit(0)
         try:
             flasher_liq = TP.liquid0.zs
         except AttributeError as e:
-            print(e)
+            # print(e)
             flasher_liq = None
         return flasher_gas, flasher_liq, sf
 
