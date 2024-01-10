@@ -140,10 +140,11 @@ class ReadData:
                     for qmc in paras_array_comb['qmc']:
                         for Th in paras_array_comb['Th']:
                             for qmh in paras_array_comb['qmh']:
+
                                 insulator_para.iloc[i] = paras_array['status'] + paras_array['pattern'] + \
                                                          Din + thick + \
                                                          Tc + qmc + Th + qmh + [location, nit, q]
-                            i += 1
+                                i += 1
         return insulator_para
 
     @property
@@ -162,15 +163,15 @@ class ReadData:
         for n in range(stage):
             L_array.append(self.data_array(self.react_para['L'][n]))
             Dt_array.append(self.data_array(self.react_para['Dt'][n]))
-            Din_array.append(self.data_array(self.react_para['Din'][n]))
+            Din_array.append(self.data_array(self.react_para['Dc'][n]))
 
         column = list(self.react_para.keys())
         column.remove('L')
         column.remove('Dt')
-        column.remove('Din')
+        column.remove('Dc')
         Dt_name = [f'Dt{n + 1}' for n in range(stage)]
         L_name = [f'L{n + 1}' for n in range(stage)]
-        Din_name = [f'Din{n + 1}' for n in range(stage)]
+        Din_name = [f'Dc{n + 1}' for n in range(stage)]
         # generate the combination of reactor length, diameter
         if stage > 0:
             Ls = [[L1] for L1 in L_array[0]]

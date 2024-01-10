@@ -320,7 +320,7 @@ class Insulation:
                 dT = qcv_cond / Ft / property_h["cp_m"]  # k/m
                 dev = gap_min / xi_h["H2O"]
             # [xc, xd, Nc, Nd, T, dTdz]
-            # path = r'D:\document\04Code\PycharmProjects\MTC\result\typical.txt'
+            # path = r'D:\document\04Code\PycharmProjects\MTC\result\typical_U.txt'
             # np.savetxt(path,ode_res)
             # xsol = np.linspace(0.02, 0.03, 200)
             # plt.plot(xsol, ode_res[0], label='H2O')
