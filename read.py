@@ -56,6 +56,7 @@ class ReadData:
         if self.feed_para["condition"]["fresh"] == 'on':
             feed = self.feed_para["condition"]
             H2_CO2 = feed["H2/CO2"]
+            inert = feed["inert"]
             recycle = 1
 
             # feed para frame
@@ -74,7 +75,7 @@ class ReadData:
                         for CO_CO2 in CO_CO2_array:
                             for H2 in H2_array:
                                 for T_feed in T_feed_array:
-                                    feed_para.iloc[i] = np.array([T, T_feed, P, recycle, H2_CO2, CO_CO2, H2, sv])
+                                    feed_para.iloc[i] = np.array([T, T_feed, P, recycle, H2_CO2, CO_CO2, H2, sv, inert])
                                     i += 1
         else:
             feed = np.array([float(i) for i in self.feed_para["feed"].split('\t')])
@@ -83,14 +84,14 @@ class ReadData:
             P = self.feed_para["condition"]['P'][0]
             feed = np.append(np.array([T, T_feed, P, 0]), feed)
             feed_para = pd.DataFrame(feed.reshape(1, len(feed)),
-                                     columns=['T', 'T_feed', 'P', 'fresh', "CO2", "H2", "Methanol", "H2O", "CO"])
+                                     columns=['T', 'T_feed', 'P', 'fresh', "CO2", "H2", "Methanol", "H2O", "CO", 'Ar'])
         return feed_para
 
     @property
     def insulator_data(self):
         stage = self.react_para['stage']
 
-        paras_stage = ['Din', 'Thick', 'Tc', 'qmc', 'Th',  'qmh']
+        paras_stage = ['Din', 'Thick', 'Tc', 'qmc', 'Th', 'qmh']
         paras_array = {'status': [0 if i == 'off' else 1 for i in self.insulator_para['status']],
                        'pattern': self.insulator_para["pattern"]}
         paras_array_name = {'status_name': [f'status{n + 1}' for n in range(stage)],
@@ -140,7 +141,6 @@ class ReadData:
                     for qmc in paras_array_comb['qmc']:
                         for Th in paras_array_comb['Th']:
                             for qmh in paras_array_comb['qmh']:
-
                                 insulator_para.iloc[i] = paras_array['status'] + paras_array['pattern'] + \
                                                          Din + thick + \
                                                          Tc + qmc + Th + qmh + [location, nit, q]
@@ -208,7 +208,7 @@ class ReadData:
     @property
     def hr(self):
         """
-        parameter for the calculation of reaction enthalpy, dH = aT^4+b
+        parameter for the calculation of reaction enthalpy, dH = aT^4+b J/kmol
         ref: Cui, 2020, Chemical Engineering Journal, 10.1016/j.cej.2020.124632
         :return: [a, b] for reactions
         """
@@ -273,14 +273,14 @@ class ReadData:
             "H2O": [6.62e-11, 124119],
             "H2O/H2": [3453.38, 0]
         }
-        # kr = {
-        #     "1": [1.07, 36696],
-        #     "2": [1.22e10, -94765]
-        # }
         kr = {
-            "1": [1.07, 40000],
-            "2": [1.22e10, -98084]
+            "1": [1.07, 36696],
+            "2": [1.22e10, -94765]
         }
+        # kr = {
+        #     "1": [1.07, 40000],
+        #     "2": [1.22e10, -98084]
+        # }
         chem_data = {"stoichiometry": stoichiometry, "kad": kad, "kr": kr, "keq": self.keq, 'heat_reaction': self.hr}
         return chem_data
 

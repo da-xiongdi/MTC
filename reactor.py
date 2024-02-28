@@ -14,7 +14,7 @@ class Reaction:
     energy and mass balance are calculated
     """
 
-    def __init__(self, L, D, Dc, n, phi, rho, chem_para, T0, P0, F0, eos, qmh=0):
+    def __init__(self, L, D, Dc, n, phi, rho, chem_para, T0, P0, F0, comp, eos, qmh=0):
 
         # 0 for ideal 1 for SRK
         self.eos = eos
@@ -29,14 +29,18 @@ class Reaction:
         self.ds = 6e-3  # catalyst effective particle diameter, cylinder
 
         # prescribed chem data of reaction
-        self.comp_list = ["CO2", "H2", "Methanol", "H2O", "CO"]
+        self.comp_list = comp
         self.chem_data = chem_para
         self.react_num = len(self.chem_data["kr"])
-        self.react_sto = np.empty((self.react_num, 5))
+        self.comps_num = len(self.comp_list)
+        self.react_sto = np.empty((self.react_num, self.comps_num))
         self.kn_model = self.chem_data['kn_model']
         for i in range(self.react_num):
             key = str(i + 1)
-            self.react_sto[i] = self.chem_data["stoichiometry"][key]
+            if self.comps_num == 5:
+                self.react_sto[i] = self.chem_data["stoichiometry"][key]
+            else:
+                self.react_sto[i] = self.chem_data["stoichiometry"][key] + [0]
 
         # feed gas parameter
         self.vle_cal = VLEThermo(self.comp_list)
@@ -53,6 +57,8 @@ class Reaction:
         for key, value in in_dict["heat_reaction"].items():
             dH[i] = -(value[0] * T + value[1]) * 1e-6
             i += 1
+        # dH[0] = -49.93
+        # dH[1] = 41.12
         return dH
 
     @staticmethod
@@ -147,6 +153,49 @@ class Reaction:
         h = Nu * mix_property['k'] / self.Dt  # W/m K
         return h
 
+    def htr2(self, T, P, F_dict):
+        """
+        calculate the internal heat transfer coe in within the catalyst layer
+
+        :param T: temperature of reactor gas, K
+        :param P: pressure of reactor, bar
+        :param F_dict: molar flow rate of each component, mol/s; ndarray
+        :return: convection heat transfer coefficient, W/m2 K
+        """
+        Ft = np.sum(F_dict)
+        xi = F_dict / Ft * P
+        z = self.vle_cal.z(T=T, P=P, x=F_dict)
+        gas_prop = mixture_property(T, pd.Series(xi, index=self.comp_list), P, z, rho_only=False)
+        kp = 0.38  # 0.21 + 0.00015 * T  # thermal conductivity of particle
+
+        De = self.Dt if self.qmh == 0 else (self.Dt - self.Dc)  # effective diameter of annual tube
+        Ae = self.Dt ** 2 / 4 if self.qmh == 0 else (self.Dt ** 2 - self.Dc ** 2) / 4
+
+        v = Ft / (gas_prop['rho'] / gas_prop['M'])  # m3/s self.v0 * (self.P0 / P) * (T / self.T0) * (Ft / self.Ft0)
+        u = v / (np.pi * Ae)
+        r_kg_ks = gas_prop['k'] / kp
+
+        ke0 = gas_prop['k'] * ((1 - self.phi) / 1.5 +
+                               self.phi / (0.13 * (1 - self.phi) ** 1.44 + 2 / 3 * r_kg_ks))
+        Pe = 8.65 * (1 + 19.4 * (self.ds / De) ** 2)
+        keg = u * gas_prop['rho'] * gas_prop['cp_m'] * self.ds / Pe
+        ke = ke0 + keg
+
+        hw0 = (2 * (1 - self.phi) +
+               self.phi / (2 / 3 * r_kg_ks + 0.0024 * (De / self.ds) ** 1.58)) * gas_prop['k'] / self.ds
+        Re = u * gas_prop['rho'] * self.ds / gas_prop['vis']
+        if Re < 1200:
+            hwg = 0.0835 * Re ** 0.91 * gas_prop['k'] / self.ds
+            if Re < 10:
+                print('TOO SMALL Re')
+        else:
+            hwg = 1.23 * Re ** 0.53 * gas_prop['k'] / self.ds
+
+        hw = hwg + hw0
+        Rin = (np.log(self.Dt / self.Dc) / (2 * np.pi * ke) + 1 / (np.pi * self.Dc * hw))  # 1/(W/m K)
+        Ro = (np.log(self.Dt / self.Dc) / (2 * np.pi * ke) + 1 / (np.pi * self.Dt * hw))
+        return Rin, Ro
+
     def htr(self, T, P, F_dict):
         """
         calculate the internal heat transfer coe in within the catalyst layer
@@ -160,7 +209,7 @@ class Reaction:
         xi = F_dict / Ft * P
         z = self.vle_cal.z(T=T, P=P, x=F_dict)
         gas_prop = mixture_property(T, pd.Series(xi, index=self.comp_list), P, z, rho_only=False)
-        kp = 0.21 + 0.00015 * T  # thermal conductivity of particle
+        kp = 0.38  # 0.21 + 0.00015 * T  # thermal conductivity of particle
         De = self.Dt if self.qmh == 0 else (self.Dt - self.Dc)  # effective diameter of annual tube
         Ae = self.Dt ** 2 / 4 if self.qmh == 0 else (self.Dt ** 2 - self.Dc ** 2) / 4
 
@@ -185,8 +234,7 @@ class Reaction:
         Bi = hw * De / 2 / ke_r
         hk = 1 / (De / 2 / 3 / ke_r * (Bi + 3) / (Bi + 4))
         Ut = 1 / (1 / hw + 1 / hk)
-
-        return Ut
+        return 1 / Ut  # 1/(W/m2 K)
 
     def rate_vi(self, T, Pi):
         """
@@ -237,7 +285,7 @@ class Reaction:
         react_rate[1] = driving / inhibiting
 
         # compute the reaction rate for each component in every reaction
-        react_comp_rate = self.react_sto * np.repeat(react_rate, 5).reshape(self.react_num, 5)
+        react_comp_rate = self.react_sto * np.repeat(react_rate, self.comps_num).reshape(self.react_num, self.comps_num)
         react_comp_rate = np.vstack((react_comp_rate, np.sum(react_comp_rate, axis=0).T))
         # react_comp_rate = np.hstack((react_comp_rate, np.array([0, 0, 0]).reshape(3, 1)))
 
@@ -336,7 +384,7 @@ class Reaction:
         else:
             phi = 1
         v = self.v0 * (self.P0 / P) * (T / self.T0) * (Ft / self.Ft0)
-        Pi = F_dict * R * T / v * 1e-5  # bar
+        Pi = xi*P #F_dict * R * T / v * 1e-5  # bar
         fi = Pi * phi
         # calculate the change of the molar flow rate due to reactions, mol/s/kg_cat
         if self.kn_model == 'GR':
@@ -354,19 +402,23 @@ class Reaction:
         dH = np.matmul(dF_react[:-1, 0], dH_react.T)
 
         # calculate the heat capacity of each component, cp*n, J/(s K)
-        heat_capacity = 0
-        for i in range(5):
-            # read the heat capacity for each component, J/(mol K)
-            cp = PropsSI('CPMOLAR', 'T', T, 'P', Pi[i] * 1e5, self.comp_list[i]) if Pi[i] > 0 else 0
-            heat_capacity += cp * F_dict[i]
-        # cal = VLEThermo(self.comp_list)
-        # heat_capacity = Ft * cal.cal_cp(T, P, xi)
-        dT = dH * 1e3 / heat_capacity  # K/kg_cat
+        # heat_capacity = 0
+        # for i in range(5):
+        #     # read the heat capacity for each component, J/(mol K)
+        #     cp = PropsSI('CPMOLAR', 'T', T, 'P', Pi[i] * 1e5, self.comp_list[i]) if Pi[i] > 0 else 0
+        #     heat_capacity += cp * F_dict[i]
+        # # cal = VLEThermo(self.comp_list)
+        # # heat_capacity = Ft * cal.cal_cp(T, P, xi)
+        # dT = dH * 1e3 / heat_capacity  # K/kg_cat
+        # res = {
+        #     'mflux': dF_react[-1],
+        #     'tc': heat_capacity,
+        #     'hflux': dH * 1e3,
+        #     'Tvar': dT
+        # }
         res = {
             'mflux': dF_react[-1],
-            'tc': heat_capacity,
-            'hflux': dH * 1e3,
-            'Tvar': dT
+            'hflux': dH * 1e3
         }
         return res
 

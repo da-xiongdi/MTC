@@ -77,11 +77,11 @@ def mixture_property(T, xi_gas, Pt, z=1, rho_only=False, phis=None):
                 # viscosity, Pa S
                 vis[i] = PropsSI('V', 'T', T, 'P', Pt, gas)
                 # heat capacity, J/(mol K)
-                cp[i] = PropsSI('CP0MOLAR', 'T', T, 'P', Pt, gas)
+                cp[i] = PropsSI('CPMOLAR', 'T', T, 'P', Pt, gas)
                 # density, kg/m3
                 # rho[i] = PropsSI('D', 'T', T, 'P', xi_gas[comp], gas)
             else:
-                cp[i] = PropsSI('CP0MOLAR', 'T', T, 'Q', 1, gas)
+                cp[i] = PropsSI('CPMOLAR', 'T', T, 'Q', 1, gas)
                 k[i] = PropsSI('L', 'T', T, 'Q', 1, gas)
                 vis[i] = PropsSI('V', 'T', T, 'Q', 1, gas)
                 # print(comp, T, cp[i])
@@ -107,8 +107,10 @@ def mixture_property(T, xi_gas, Pt, z=1, rho_only=False, phis=None):
             denominator[i, j] = xi_gas[j] * phi[i, j]  # if i != j else 0
         vis_m += xi_gas[i] * vis[i] / np.sum(denominator[i])
         k_m += xi_gas[i] * k[i] / np.sum(denominator[i])
-    return pd.Series([k_m, vis_m, rho_m, cp[2], cp[3], cp_m, M_m],
-                     index=["k", "vis", 'rho', 'cp_' + xi_gas.index[2], 'cp_' + xi_gas.index[3], "cp_m", "M"])
+    prop = np.array([k_m, vis_m, rho_m, cp_m, M_m])
+    prop = np.hstack((prop, cp))
+    return pd.Series(prop,
+                     index=["k", "vis", 'rho', "cp_m", "M"] + ['cp_' + xi_gas.index[i] for i in range(n)])
 
 
 class VLE:
@@ -164,6 +166,7 @@ class VLE:
         """
         if self.comp == ["CO2", "H2", "Methanol", "H2O", "CO"]:
             # mixing rule parameter CO2 H2 CH3OH H2O CO
+
             k = np.array([[0, -0.3462, 0.0148, 0.0737, 0],
                           [-0.3462, 0, 0, 0, 0.0804],
                           [0.0148, 0, 0, -0.0789, 0],
@@ -426,8 +429,10 @@ class Thermo:
 
 class VLEThermo:
     def __init__(self, comp, ref='ch', kij=None):
-        self.comp = np.array(comp)
-        self.comp[comp == 'CO'] = 'carbon monoxide'
+        self.comp = comp.copy()
+        self.num = len(comp)
+        for i in range(self.num):
+            self.comp[i] = 'carbon monoxide' if self.comp[i] == 'CO' else self.comp[i]
         self.kij = kij
         self.const, self.cor = ChemicalConstantsPackage.from_IDs(self.comp)
         self.cp, self.eos_kw = self.eos_paras()
@@ -445,15 +450,21 @@ class VLEThermo:
             raise ValueError('the reference state is not available')
 
     def eos_paras(self, eos='SRK'):
-        n_count = len(self.comp)
-        cp_cal = [HeatCapacityGas(CASRN=self.const.CASs[i], MW=self.const.MWs[i], method='TRCIG') for i in
-                  range(n_count)]
+        # n_count = len(self.comp)
+        cp_cal = []
+        for i in range(self.num):
+            try:
+                cp_cal.append(HeatCapacityGas(CASRN=self.const.CASs[i], MW=self.const.MWs[i], method='TRCIG'))
+            except ValueError:
+                cp_cal.append(HeatCapacityGas(CASRN=self.const.CASs[i], MW=self.const.MWs[i], method='POLING_POLY'))
+
         if eos == 'SRK':
-            kijs = np.array([[0, -0.3462, 0.0148, 0.0737, 0],
-                             [-0.3462, 0, 0, 0, 0.0804],
-                             [0.0148, 0, 0, -0.0789, 0],
-                             [0.0737, 0, -0.0789, 0, 0],
-                             [0, 0.0804, 0, 0, 0]]) if self.kij is None else self.kij
+            kijs = np.zeros((self.num, self.num))
+            kijs[:5, :5] = np.array([[0, -0.3462, 0.0148, 0.0737, 0],
+                                     [-0.3462, 0, 0, 0, 0.0804],
+                                     [0.0148, 0, 0, -0.0789, 0],
+                                     [0.0737, 0, -0.0789, 0, 0],
+                                     [0, 0.0804, 0, 0, 0]]) if self.kij is None else self.kij
 
             eos_kwargs = dict(Tcs=np.array(self.const.Tcs), Pcs=np.array(self.const.Pcs),
                               omegas=np.array(self.const.omegas), kijs=kijs)
@@ -515,6 +526,12 @@ class VLEThermo:
         g = np.array(self.const.Hfgs) - 298.15 * np.array(self.const.Sfgs)
         return np.array(self.const.Sfgs), np.array(self.const.Hfgs), g
 
+    def cal_cp_ig(self, T):
+        cps = []
+        for i in self.cp:
+            cps.append(i.T_dependent_property(T))
+        return np.array(cps)
+
     def cal_G(self, T, P, x):
         frac = x / np.sum(x)
         gas = CEOSGas(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw)
@@ -574,7 +591,7 @@ class VLEThermo:
         liquid = CEOSLiquid(SRKMIX, HeatCapacityGases=self.cp, eos_kwargs=self.eos_kw)
         flasher = FlashVL(self.const, self.cor, liquid=liquid, gas=gas)
         try:
-            return flasher.flash(zs=frac, P=P*1e5, VF=1).T
+            return flasher.flash(zs=frac, P=P * 1e5, VF=1).T
         except UnboundLocalError:
             return 300
 
